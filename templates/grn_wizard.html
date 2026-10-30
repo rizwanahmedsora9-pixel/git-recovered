@@ -1,0 +1,1672 @@
+{% extends "layout.html" %}
+
+
+
+{% block content %}
+<style>
+    .grn-step3-highlight {
+        background: linear-gradient(135deg, #0b3b2e, #1f6b4a);
+        color: #f8fafc;
+        border: 1px solid #1a7f5a;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    }
+    .grn-step3-highlight .form-label {
+        color: #e2f3eb;
+        font-weight: 700;
+    }
+    .grn-step3-highlight .form-control {
+        background: #0f1f1a;
+        color: #f8fafc;
+        border: 1px solid #2c8f6b;
+    }
+    .grn-step3-highlight .form-control:focus {
+        border-color: #41c28a;
+        box-shadow: 0 0 0 0.2rem rgba(65, 194, 138, 0.25);
+    }
+
+    .entry-highlighted {
+        background-color: rgba(234, 179, 8, 0.22) !important;
+        box-shadow: inset 4px 0 0 #eab308 !important;
+    }
+    .entry-highlighted > td {
+        background-color: transparent !important;
+    }
+    .row-star-btn {
+        cursor: pointer;
+        font-size: 1.15rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.15s ease, color 0.15s ease;
+        user-select: none;
+        line-height: 1;
+        color: #94a3b8;
+    }
+    .row-star-btn:hover {
+        transform: scale(1.25);
+        color: #eab308 !important;
+    }
+    .row-star-btn.starred {
+        color: #eab308 !important;
+    }
+
+    /* ==================================================================
+       GRN screen — consumption indicator, records toolbar, row actions
+       ------------------------------------------------------------------
+       Layout only.  Every number on this page comes from the server
+       projection in app/services/grn_consumption.py; CSS never changes a
+       quantity, a percentage or a colour band.
+       ================================================================== */
+    .grn-page {
+        --grn-bar-h: 11px;
+        --grn-radius: 10px;
+    }
+
+    /* ---------- shared bar (per lot + per GRN) ---------- */
+    .grn-consume { display: flex; align-items: center; gap: .55rem; }
+    .grn-consume-track {
+        position: relative;
+        flex: 1 1 auto;
+        height: var(--grn-bar-h);
+        min-width: 70px;
+        border-radius: 999px;
+        background: var(--ui-surface-2, #0f1730);
+        border: 1px solid var(--ui-border, #334155);
+        overflow: hidden;
+    }
+    .grn-consume-fill {
+        height: 100%;
+        width: 0;
+        border-radius: 999px;
+        background: #10b981;
+        transition: width .45s ease, background-color .45s ease;
+    }
+    .grn-consume-pct {
+        flex: 0 0 auto;
+        min-width: 52px;
+        text-align: right;
+        font-size: .8rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        color: var(--ui-text, #e2e8f0);
+    }
+    .grn-consume.level-low .grn-consume-pct { color: #34d399; }
+    .grn-consume.level-moderate .grn-consume-pct { color: #a3e635; }
+    .grn-consume.level-high .grn-consume-pct { color: #fbbf24; }
+    .grn-consume.level-critical .grn-consume-pct { color: #fb923c; }
+    .grn-consume.level-complete .grn-consume-pct { color: #f87171; }
+    .grn-consume-fill.level-low { background: linear-gradient(90deg, #047857, #10b981); }
+    .grn-consume-fill.level-moderate { background: linear-gradient(90deg, #65a30d, #a3e635); }
+    .grn-consume-fill.level-high { background: linear-gradient(90deg, #b45309, #fbbf24); }
+    .grn-consume-fill.level-critical { background: linear-gradient(90deg, #c2410c, #fb923c); }
+    .grn-consume-fill.level-complete { background: linear-gradient(90deg, #991b1b, #ef4444); }
+
+    /* ---------- compact rows: one line per GRN, details behind the arrow ---------- */
+    .grn-th-toggle, .grn-td-toggle { width: 40px; text-align: center; padding-right: 0; }
+    .grn-expand-btn {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 1px solid var(--ui-border-strong, #334155);
+        border-radius: 8px;
+        background: var(--ui-surface-2, #0f1730);
+        color: var(--ui-text-muted, #94a3b8);
+        line-height: 1;
+        transition: color .15s ease, border-color .15s ease, background-color .15s ease;
+    }
+    .grn-expand-btn:hover,
+    .grn-expand-btn:focus-visible { color: var(--ui-text, #e2e8f0); border-color: var(--accent, #fbbf24); }
+    .grn-expand-btn i { font-size: .78rem; transition: transform .18s ease; }
+    .grn-expand-btn[aria-expanded="true"] {
+        color: var(--accent, #fbbf24);
+        border-color: var(--accent, #fbbf24);
+        background: rgba(251, 191, 36, .12);
+    }
+    .grn-expand-btn[aria-expanded="true"] i { transform: rotate(90deg); }
+    .grn-row.is-expanded > td { background: var(--ui-surface-2, #0f1730); }
+
+    /* The collapsed row names the lots; every figure waits behind the arrow. */
+    .grn-items-line {
+        display: block;
+        max-width: 310px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: .8rem;
+        color: var(--ui-text-muted, #94a3b8);
+    }
+    .grn-items-line .grn-item-name { color: var(--ui-text, #e2e8f0); font-weight: 600; }
+    .grn-items-line b { color: var(--ui-text, #e2e8f0); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .grn-items-line .grn-item-sep { opacity: .4; margin: 0 .28rem; }
+    .grn-items-more { color: var(--accent, #fbbf24); font-weight: 700; }
+    .grn-items-empty { font-size: .76rem; color: var(--ui-text-muted, #94a3b8); }
+
+    /* ---------- expanded panel: one compact strip per lot ---------- */
+    /* The details live in their own <tr>, so the collapsed row stays one line.
+       There is deliberately no per-GRN roll-up: a GRN with several lots reports
+       each lot on its own strip instead of one aggregate figure. */
+    .grn-details-row > td { padding: 0 !important; border-top: 0 !important; }
+    .grn-details-row[hidden] { display: none !important; }
+    .grn-details {
+        padding: .55rem .75rem .65rem;
+        background: var(--ui-surface-2, #0f1730);
+        border-top: 1px solid var(--ui-border-strong, #334155);
+        border-bottom: 1px solid var(--ui-border-strong, #334155);
+        box-shadow: inset 3px 0 0 var(--accent, #fbbf24);
+    }
+    .grn-details-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .15rem .9rem; margin-bottom: .4rem; }
+    .grn-details-title { font-size: .7rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--ui-text, #e2e8f0); }
+    .grn-details-note { font-size: .68rem; color: var(--ui-text-muted, #94a3b8); }
+    .grn-lot-list { display: flex; flex-direction: column; gap: .35rem; }
+    .grn-item-consume {
+        display: grid;
+        grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+        align-items: center;
+        gap: .2rem .9rem;
+        padding: .4rem .55rem;
+        border: 1px solid var(--ui-border, #334155);
+        border-radius: var(--grn-radius);
+        background: var(--ui-surface, #161e33);
+    }
+    .grn-consume-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .5rem; min-width: 0; }
+    .grn-consume-name { font-weight: 700; color: var(--ui-text, #e2e8f0); }
+    .grn-consume-meta { font-size: .68rem; color: var(--ui-text-muted, #94a3b8); }
+    .grn-consume-meta b { color: var(--ui-text, #e2e8f0); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .grn-lot-meter { min-width: 0; }
+    .grn-lot-figures {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .05rem .8rem;
+        margin-bottom: .25rem;
+        font-size: .69rem;
+        color: var(--ui-text-muted, #94a3b8);
+    }
+    .grn-lot-figures b { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ui-text, #e2e8f0); }
+    .grn-lot-figures .fig-consumed b { color: #fb923c; }
+    .grn-lot-figures .fig-remaining b { color: #34d399; }
+    .grn-consume-status {
+        font-size: .58rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        border-radius: 999px;
+        padding: .04rem .4rem;
+        border: 1px solid var(--ui-border-strong, #334155);
+        color: var(--ui-text-muted, #94a3b8);
+    }
+    .grn-consume-status.is-recorded { border-color: #10b981; color: #34d399; }
+    .grn-consume-status.is-reconstructed { border-color: #0ea5e9; color: #38bdf8; }
+
+    /* ---------- whole-screen overall meter: one slim strip ---------- */
+    .grn-overview {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: .3rem 1rem;
+        padding: .45rem .75rem;
+        margin-bottom: .7rem;
+        border: 1px solid var(--ui-border, #334155);
+        border-radius: var(--grn-radius);
+        background: var(--ui-surface-2, #0f1730);
+        font-size: .71rem;
+        color: var(--ui-text-muted, #94a3b8);
+    }
+    .grn-overview-title { font-size: .66rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; color: var(--ui-text, #e2e8f0); }
+    .grn-overview-pct { font-size: 1.05rem; font-weight: 800; line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; color: #34d399; }
+    .grn-overview-bar {
+        position: relative;
+        flex: 1 1 150px;
+        min-width: 110px;
+        max-width: 320px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--ui-surface, #161e33);
+        border: 1px solid var(--ui-border-strong, #334155);
+        overflow: hidden;
+    }
+    .grn-overview-fill {
+        height: 100%;
+        width: 0;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #047857, #10b981);
+        transition: width .5s ease, background .5s ease;
+    }
+    .grn-overview-scope, .grn-overview-figures, .grn-overview-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .8rem; }
+    .grn-overview-figures b, .grn-overview-meta b { color: var(--ui-text, #e2e8f0); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .grn-overview-meta { margin-left: auto; font-size: .66rem; }
+    .grn-overview.level-moderate .grn-overview-pct { color: #a3e635; }
+    .grn-overview.level-high .grn-overview-pct { color: #fbbf24; }
+    .grn-overview.level-critical .grn-overview-pct { color: #fb923c; }
+    .grn-overview.level-complete .grn-overview-pct { color: #f87171; }
+    .grn-overview.level-moderate .grn-overview-fill { background: linear-gradient(90deg, #65a30d, #a3e635); }
+    .grn-overview.level-high .grn-overview-fill { background: linear-gradient(90deg, #b45309, #fbbf24); }
+    .grn-overview.level-critical .grn-overview-fill { background: linear-gradient(90deg, #c2410c, #fb923c); }
+    .grn-overview.level-complete .grn-overview-fill { background: linear-gradient(90deg, #991b1b, #ef4444); }
+
+    /* ---------- records toolbar ---------- */
+    .grn-records-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem .9rem; }
+    .grn-records-title { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; }
+    .grn-count-pill {
+        font-size: .68rem;
+        font-weight: 700;
+        padding: .1rem .5rem;
+        border-radius: 999px;
+        background: var(--ui-surface-3, #1d2647);
+        border: 1px solid var(--ui-border-strong, #334155);
+        color: var(--ui-text-muted, #94a3b8);
+        font-variant-numeric: tabular-nums;
+    }
+    .grn-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+    .grn-toolbar .form-control { min-width: 0; }
+    .grn-toolbar-field { width: 158px; }
+    .grn-toolbar-search { width: 210px; }
+    .grn-toolbar-group { display: flex; align-items: center; gap: .35rem; }
+    .grn-toolbar-sep { align-self: stretch; width: 1px; margin: 0 .1rem; background: var(--ui-border-strong, #334155); }
+    .grn-toolbar .btn { white-space: nowrap; }
+
+    /* ---------- table ---------- */
+    .grn-table { margin-bottom: 0; }
+    .grn-table > thead > tr > th {
+        font-size: .72rem;
+        font-weight: 700;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        color: var(--ui-text-muted, #94a3b8);
+    }
+    .grn-table > tbody > tr > td { vertical-align: middle; }
+    .grn-sort-link { color: var(--ui-text-muted, #94a3b8); text-decoration: none; }
+    .grn-sort-link:hover { color: var(--ui-text, #e2e8f0); text-decoration: underline; }
+    .grn-sort-link.is-active { color: var(--accent, #fbbf24); }
+    .grn-th-sub {
+        display: block;
+        font-size: .62rem;
+        font-weight: 600;
+        letter-spacing: .02em;
+        text-transform: none;
+        opacity: .8;
+    }
+    .grn-th-star, .grn-td-star { width: 42px; text-align: center; }
+    .grn-col-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .grn-qty { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ui-text, #e2e8f0); }
+    .grn-qty-label { display: block; font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ui-text-muted, #94a3b8); }
+    .grn-supplier { font-weight: 600; }
+
+    /* ---------- row actions: one tidy, uniform button strip ---------- */
+    .grn-actions-cell { white-space: nowrap; }
+    .grn-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex-wrap: nowrap; }
+    /* Higher specificity than the global .btn rules in theme.css, which force a
+       32px min-height and generous padding on every .btn-sm. */
+    .grn-page .grn-row-actions .btn {
+        width: 34px;
+        height: 34px;
+        min-width: 34px;
+        min-height: 34px !important;
+        padding: 0 !important;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        border-radius: 8px;
+        font-size: .9rem;
+    }
+    .grn-action-form { display: inline-flex; margin: 0; }
+
+    /* ---------- row highlight (the star column) must survive the cards ---------- */
+    .entry-highlighted .grn-item-consume {
+        background: rgba(234, 179, 8, 0.12);
+        border-color: rgba(234, 179, 8, 0.5);
+    }
+    /* The main row carries .entry-highlighted; the details panel is its sibling. */
+    .grn-row.entry-highlighted + .grn-details-row .grn-details {
+        background: rgba(234, 179, 8, 0.1);
+        box-shadow: inset 3px 0 0 #eab308;
+    }
+    html[data-theme="light"] .entry-highlighted .grn-item-consume {
+        background: rgba(234, 179, 8, 0.16);
+    }
+    /* ---------- refresh affordance ---------- */
+    .grn-refresh-spin { display: inline-block; animation: spin .8s linear infinite; }
+
+    /* ---------- light theme: same five bands, ink-dark labels ---------- */
+    html[data-theme="light"] .grn-consume.level-low .grn-consume-pct { color: #047857; }
+    html[data-theme="light"] .grn-consume.level-moderate .grn-consume-pct { color: #4d7c0f; }
+    html[data-theme="light"] .grn-consume.level-high .grn-consume-pct { color: #b45309; }
+    html[data-theme="light"] .grn-consume.level-critical .grn-consume-pct { color: #c2410c; }
+    html[data-theme="light"] .grn-consume.level-complete .grn-consume-pct { color: #b91c1c; }
+    html[data-theme="light"] .grn-overview.level-low .grn-overview-pct { color: #047857; }
+    html[data-theme="light"] .grn-overview.level-moderate .grn-overview-pct { color: #4d7c0f; }
+    html[data-theme="light"] .grn-overview.level-high .grn-overview-pct { color: #b45309; }
+    html[data-theme="light"] .grn-overview.level-critical .grn-overview-pct { color: #c2410c; }
+    html[data-theme="light"] .grn-overview.level-complete .grn-overview-pct { color: #b91c1c; }
+    html[data-theme="light"] .grn-consume-status.is-recorded { color: #047857; }
+    html[data-theme="light"] .grn-consume-status.is-reconstructed { color: #0369a1; }
+    html[data-theme="light"] .grn-lot-figures .fig-consumed b { color: #c2410c; }
+    html[data-theme="light"] .grn-lot-figures .fig-remaining b { color: #047857; }
+
+    @media (max-width: 1199.98px) {
+        .grn-items-line { max-width: 240px; }
+    }
+    @media (max-width: 991.98px) {
+        .grn-toolbar-field, .grn-toolbar-search { width: 100%; }
+        .grn-toolbar-group { flex: 1 1 100%; }
+        .grn-toolbar-sep { display: none; }
+        .grn-overview-meta { margin-left: 0; }
+    }
+    @media (max-width: 767.98px) {
+        .grn-consume-pct { min-width: 46px; font-size: .74rem; }
+        .grn-item-consume { grid-template-columns: minmax(0, 1fr); }
+        .grn-items-line { max-width: 180px; }
+        .grn-overview-meta { width: 100%; }
+        /* Thumb-sized tap targets on phones. */
+        .grn-page .grn-row-actions .btn { width: 38px; height: 38px; min-width: 38px; min-height: 38px !important; }
+        .grn-expand-btn { width: 32px; height: 32px; }
+    }
+</style>
+<div class="container-fluid grn-page">
+    <div class="row mb-3">
+
+        <div class="col-md-6">
+
+            <h3>GRN (Goods Receipt Note)</h3>
+
+        </div>
+
+        <div class="col-md-6 text-end">
+
+            <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#addGrnForm" aria-expanded="false">
+
+                <i class="bi bi-plus-lg"></i> Add New Record
+
+            </button>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- Add New Record Form (Wizard) -->
+
+    <div class="collapse {{ 'show' if edit_grn else '' }}" id="addGrnForm">
+
+        <div class="card mb-4">
+
+            <div class="card-header bg-primary text-white">
+
+                {{ 'Edit Record #' ~ edit_grn.auto_bill_no if edit_grn else 'Add New Record' }}
+
+            </div>
+
+            <div class="card-body">
+
+                <form action="{{ url_for('edit_grn', id=edit_grn.id) if edit_grn else url_for('grn') }}" method="POST" enctype="multipart/form-data" id="grnForm">
+
+                    {% if not edit_grn %}<input type="hidden" name="action" value="add">{% endif %}
+
+                    
+
+                    <!-- Step 1 -->
+
+                    <div id="step1" class="step-section">
+
+                        <h5 class="border-bottom pb-2">Step 1: Select Supplier and Mode of Payment</h5>
+
+                        <div class="row g-3">
+
+                            <div class="col-md-4">
+
+                                <label class="form-label">Supplier Name</label>
+
+                                <div class="input-group position-relative">
+
+                                    <input type="text" class="form-control" name="supplier" id="supplierInput" required placeholder="Select or Type Supplier" value="{{ (edit_grn.supplier or '') if edit_grn else '' }}" autocomplete="off" onfocus="showCombobox('supplierInput', 'supplierCombobox')" oninput="document.getElementById('supplier_id').value=''; filterCombobox('supplierInput', 'supplierCombobox')">
+
+                                    <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#addSupplierModal" title="Add New Supplier">
+                                        <i class="bi bi-plus-lg"></i>
+                                    </button>
+                                    <div id="supplierCombobox" class="combobox-list shadow-lg" style="display: none; width: 100%; top: 100%; left: 0;">
+
+                                    {% for s in suppliers %}
+
+                                        <div class="combobox-item" onclick="selectSupplier('{{ s.name }}', '{{ s.id }}')">
+
+                                            <span class="text-white fw-bold">{{ s.name }}</span>
+
+                                        </div>
+
+                                    {% endfor %}
+
+                                    </div>
+
+                                </div>
+
+                                <input type="hidden" name="supplier_id" id="supplier_id" value="{{ edit_grn.supplier_id if edit_grn else '' }}">
+
+                                <div id="supplierBalanceDisplay" class="mt-2"></div>
+
+                            </div>
+
+                            <div class="col-md-3 col-sm-6">
+
+                                <label class="form-label"><i class="bi bi-calendar3 me-1"></i>Date</label>
+
+                                <input type="date" class="form-control" name="date" id="grnDateInput" value="{{ edit_grn.date_posted.strftime('%Y-%m-%d') if edit_grn else today_date }}" title="Manual override: type or pick any date for this GRN" required>
+
+                            </div>
+
+                            <div class="col-md-2 col-sm-6">
+
+                                <label class="form-label"><i class="bi bi-clock me-1"></i>Time</label>
+
+                                <input type="time" step="1" class="form-control" name="time" id="grnTimeInput" value="{{ edit_grn.date_posted.strftime('%H:%M:%S' if edit_grn.date_posted.second else '%H:%M') if (edit_grn and edit_grn.date_posted) else (now_time or '') }}" title="Manual override: type or pick any time (24-hour, or 12-hour with AM/PM)" required>
+
+                            </div>
+
+                            <div class="col-md-3">
+
+                                <label class="form-label">Payment Type</label>
+
+                                <select class="form-select" name="payment_type" id="paymentTypeSelect" required>
+
+                                    <option value="Credit" {{ 'selected' if edit_grn and edit_grn.payment_type == 'Credit' }}>Credit</option>
+
+                                    <option value="Cash" {{ 'selected' if edit_grn and edit_grn.payment_type == 'Cash' }}>Cash</option>
+
+                                    <option value="Bank Transfer" {{ 'selected' if edit_grn and edit_grn.payment_type == 'Bank Transfer' }}>Bank Transfer</option>
+
+                                </select>
+
+                            </div>
+
+                            <!-- Manual date/time override helper: the two fields above stay
+                                 freely editable so a GRN can be stamped with the moment the
+                                 goods actually arrived, not the moment it was typed. -->
+                            <div class="col-12">
+                                <div class="d-flex flex-wrap align-items-center gap-2 small text-muted">
+                                    <span>
+                                        <i class="bi bi-pencil-square me-1"></i>
+                                        Date &amp; time are manual — type or pick any value to override the entry time
+                                        (24-hour, or 12-hour with AM/PM).
+                                    </span>
+                                    <span class="badge bg-secondary">System time: {{ today_date }} {{ now_time }}</span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" id="grnUseNowBtn"
+                                            data-sys-date="{{ today_date }}" data-sys-time="{{ now_time or '' }}"
+                                            title="Reset the date and time to the system clock">
+                                        <i class="bi bi-clock-history me-1"></i>Use current time
+                                    </button>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div id="paymentAccountSection" class="row g-3 mt-2" style="display: {{ 'flex' if edit_grn and edit_grn.payment_type in ['Cash', 'Bank Transfer'] else 'none' }};">
+                            <div class="col-md-6">
+                                <label class="form-label">Pay From Account</label>
+                                <select class="form-select" name="payment_account_id" id="paymentAccountSelect">
+                                    <option value="">— Select Cash/Bank Account —</option>
+                                    {% for a in accounts %}
+                                    <option value="{{ a.id }}"
+                                            data-category="{{ a.category or '' }}"
+                                            data-bank="{{ a.bank_name or '' }}"
+                                            data-holder="{{ a.account_holder_name or a.name or '' }}"
+                                            data-no="{{ a.account_number or '' }}"
+                                            {{ 'selected' if edit_grn and edit_grn.payment_account_id == a.id }}>
+                                        [{{ (a.category or 'cash')|upper }}] {{ a.name }}{% if a.bank_name %} — {{ a.bank_name }}{% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Required when Paid Amount &gt; 0 for Cash/Bank Transfer.</div>
+                            </div>
+                        </div>
+
+                        <!-- Bank Details Section -->
+                        <div id="bankDetailsSection" class="row g-3 mt-2" style="display: {{ 'flex' if edit_grn and edit_grn.payment_type == 'Bank Transfer' else 'none' }};">
+                            <div class="col-md-4">
+                                <label class="form-label">Bank Name</label>
+                                <input type="text" class="form-control" id="bankNameInput" name="bank_name" value="{{ (edit_grn.bank_name or '') if edit_grn else '' }}" placeholder="e.g. HBL">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Account Holder Name</label>
+                                <input type="text" class="form-control" id="bankAccountHolderInput" name="account_name" value="{{ (edit_grn.account_name or '') if edit_grn else '' }}" placeholder="e.g. John Doe">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Account Number</label>
+                                <input type="text" class="form-control" id="bankAccountNoInput" name="account_no" value="{{ (edit_grn.account_no or '') if edit_grn else '' }}" placeholder="e.g. 1234-5678">
+                            </div>
+                        </div>
+
+
+                        <div class="mt-3 text-end">
+
+                            <button type="button" class="btn btn-success next-step" data-next="step2">Next <i class="bi bi-arrow-down"></i></button>
+
+                        </div>
+
+                    </div>
+
+
+
+                    <!-- Step 2 -->
+
+                    <div id="step2" class="step-section mt-4" style="display: {{ 'block' if edit_grn else 'none' }};">
+                        <h5 class="border-bottom pb-2">Step 2: Select Items for the Goods Receipt Note</h5>
+
+                        <div class="row g-3">
+
+                            <div class="col-md-12">
+
+                                <label class="form-label">Item Selection Option</label>
+
+                                <div class="input-group position-relative">
+
+                                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+
+                                    <input type="text" class="form-control" id="itemSearch" placeholder="Start typing or scanning item code..." autocomplete="off" onfocus="showCombobox('itemSearch', 'materialCombobox')" oninput="filterCombobox('itemSearch', 'materialCombobox', null)">
+
+                                    <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#addMaterialModal" title="Add New Material">
+                                        <i class="bi bi-plus-lg"></i>
+                                    </button>
+                                    <div id="materialCombobox" class="combobox-list shadow-lg" style="display: none; width: 100%; top: 100%; left: 0;">
+
+                                        {% for m in materials %}
+                                        <div class="combobox-item" data-code="{{ m.code }}" data-name="{{ m.name }}" data-price="{{ m.unit_price }}">
+                                            <span class="fw-bold text-warning">{{ m.code }}</span>
+                                            <span class="text-white ms-1">- {{ m.name }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+
+
+                    <!-- Step 3 -->
+
+                    <div id="step3" class="step-section mt-4" style="display: {{ 'block' if edit_grn else 'none' }};">
+                        <h5 class="border-bottom pb-2">Step 3: Enter Cost price & GRN quantity</h5>
+
+                        
+
+                        <div class="row g-3 align-items-end mb-3 p-3 rounded grn-step3-highlight">
+                            <div class="col-md-3">
+
+                                <label class="form-label">Selected Item</label>
+
+                                <input type="text" class="form-control" id="selectedItemName" readonly>
+
+                            </div>
+
+                            <div class="col-md-2">
+                                <label class="form-label">Cost Price</label>
+                                <input type="number" class="form-control" id="selectedItemPrice" step="any" min="0" inputmode="decimal" style="font-size: 1.1rem; padding: 0.75rem;">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Quantity</label>
+                                <input type="number" class="form-control" id="selectedItemQty" step="any" min="0" inputmode="decimal" value="1" style="font-size: 1.1rem; padding: 0.75rem; font-weight: bold;">
+                            </div>
+                            <div class="col-md-3">
+                                <button type="button" class="btn btn-primary w-100" id="addItemBtn"><i class="bi bi-plus-lg"></i> Add</button>
+                                <button type="button" class="btn btn-outline-primary w-100 mt-2" id="resetCurrentItemBtn">Reset</button>
+                            </div>
+                        </div>
+
+
+
+                        <div class="table-responsive mb-4">
+
+                            <table class="table table-bordered table-striped" id="grnItemsTable">
+
+                                <thead class="table-dark">
+
+                                    <tr>
+
+                                        <th style="width: 35%;">Item</th>
+
+                                        <th style="width: 20%;">Quantity</th>
+
+                                        <th style="width: 20%;">Price</th>
+
+                                        <th style="width: 15%;">Total</th>
+
+                                        <th style="width: 10%;">Action</th>
+
+                                    </tr>
+
+                                </thead>
+
+                                <tbody>
+
+                                    {% if edit_grn %}
+                                    {% for item in edit_grn.items if not item.is_void %}
+                                    <tr>
+                                        <td>
+                                            <input type="hidden" name="grn_item_id[]" value="{{ item.id }}">
+                                            <input type="text" class="form-control form-control-sm grn-item-name" name="mat_name[]" value="{{ item.mat_name }}" readonly>
+                                        </td>
+                                        <td><input type="number" class="form-control grn-item-qty" name="qty[]" step="any" min="0" inputmode="decimal" value="{{ item.qty }}" style="font-size: 1.05rem; font-weight: bold;"></td>
+                                        <td><input type="number" class="form-control form-control-sm grn-item-price" name="price[]" step="any" min="0" inputmode="decimal" value="{{ item.price_at_time }}"></td>
+                                        <td class="grn-row-total text-end" style="font-weight: bold; font-size: 1.05rem;">{{ item.qty * item.price_at_time }}</td>
+                                        <td><button type="button" class="btn btn-danger btn-sm remove-row"><i class="bi bi-trash"></i></button></td>
+                                    </tr>
+                                    {% endfor %}
+                                    {% endif %}
+                                    <!-- Items will be added here -->
+
+                                </tbody>
+
+                                <tfoot>
+
+                                    <tr class="table-secondary fw-bold">
+
+                                        <td colspan="3" class="text-end">Total Amount:</td>
+
+                                        <td id="grnTotalAmount">0.00</td>
+
+                                        <td></td>
+
+                                    </tr>
+
+                                </tfoot>
+
+                            </table>
+
+                        </div>
+
+
+
+                        <!-- Additional Details Tabs -->
+
+                        <ul class="nav nav-tabs" id="grnTabs" role="tablist">
+
+                            <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#expenses">Expenses</a></li>
+
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tax">Tax Details</a></li>
+
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#bill">Bill Details</a></li>
+
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#comments">Comments</a></li>
+
+                        </ul>
+
+                        
+
+                        <div class="tab-content p-3 border border-top-0 mb-3">
+
+                            <div class="tab-pane fade show active" id="expenses">
+
+                                <div class="row g-3">
+
+                                    <div class="col-md-3"><label>Load Expense</label><input type="number" class="form-control" name="loading_cost" step="any" min="0" inputmode="decimal" value="{{ edit_grn.loading_cost if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Freight Expense</label><input type="number" class="form-control" name="freight_cost" step="any" min="0" inputmode="decimal" value="{{ edit_grn.freight_cost if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Other Expense</label><input type="number" class="form-control" name="other_expense" step="any" min="0" inputmode="decimal" value="{{ edit_grn.other_expense if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Adjustment Amount</label><input type="number" class="form-control" name="adjustment_amount" step="any" inputmode="decimal" value="{{ edit_grn.adjustment_amount if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Discount</label><input type="number" class="form-control" name="discount" id="grnDiscount" step="any" inputmode="decimal" value="{{ edit_grn.discount if edit_grn else '' }}"></div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="tax">
+                                <div class="row g-3">
+                                    <div class="col-md-4"><label>Purchase Tax %</label><input type="number" class="form-control" name="tax_percent" step="any" inputmode="decimal" value="{{ edit_grn.tax_percent if edit_grn else '' }}"></div>
+                                    <div class="col-md-4"><label>Purchase Tax Amount</label><input type="number" class="form-control" name="tax_amount" step="any" inputmode="decimal" value="{{ edit_grn.tax_amount if edit_grn else '' }}"></div>
+                                    <div class="col-md-4"><label>Purchase Tax Type</label>
+                                        <select class="form-select" name="tax_type">
+                                            <option value="Asset" {{ 'selected' if edit_grn and edit_grn.tax_type == 'Asset' }}>Asset</option>
+                                            <option value="Expense" {{ 'selected' if edit_grn and edit_grn.tax_type == 'Expense' }}>Expense</option>
+
+                                            <option value="Purchase(Adv Tax)" {{ 'selected' if edit_grn and edit_grn.tax_type == 'Purchase(Adv Tax)' }}>Purchase(Adv Tax)</option>
+
+                                        </select>
+
+                                    </div>
+
+                                </div>
+
+                            </div>
+
+                            <div class="tab-pane fade" id="bill">
+
+                                <div class="row g-3">
+
+                                    <div class="col-md-3"><label>Supp Invoice No.</label><input type="text" class="form-control" name="supplier_invoice_no" value="{{ (edit_grn.supplier_invoice_no or '') if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Bill No.</label><input type="text" class="form-control" name="manual_bill_no" placeholder="Internal Bill #" value="{{ (edit_grn.manual_bill_no or '') if edit_grn else '' }}"></div>
+                                    <div class="col-md-3"><label>Bill Date</label><input type="date" class="form-control" name="bill_date" value="{{ edit_grn.bill_date.strftime('%Y-%m-%d') if (edit_grn and edit_grn.bill_date) else '' }}"></div>
+                                    <div class="col-md-3"><label>Due Date</label><input type="date" class="form-control" name="due_date" value="{{ edit_grn.due_date.strftime('%Y-%m-%d') if (edit_grn and edit_grn.due_date) else '' }}"></div>
+                                    <div class="col-md-3"><label class="text-success fw-bold">Paid Amount</label><input type="number" class="form-control border-success" name="paid_amount" step="any" inputmode="decimal" value="{{ edit_grn.paid_amount if edit_grn else '' }}" placeholder="Partial/Full Payment"></div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="comments">
+
+                                <div class="mb-3"><label>Comments</label><textarea class="form-control" name="note" rows="3">{{ (edit_grn.note or '') if edit_grn else '' }}</textarea></div>
+
+                                <div class="mb-3"><label>Photo</label><input type="file" class="form-control" name="photo"></div>
+
+                            </div>
+
+                        </div>
+
+
+
+                        <div class="text-end">
+
+                            <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-save"></i> Save GRN</button>
+
+                        </div>
+
+                    </div>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- Records List -->
+
+    <div class="card">
+
+        <div class="card-header grn-records-head">
+
+            <span class="grn-records-title">
+                GRN Records
+                <span class="grn-count-pill">{{ grns|length }} on screen</span>
+            </span>
+
+            <form action="{{ url_for('grn') }}" method="GET" class="grn-toolbar">
+
+                <div class="grn-toolbar-group">
+
+                    <label class="visually-hidden" for="grnStartDate">Start date</label>
+                    <input type="date" name="start_date" id="grnStartDate" class="form-control form-control-sm grn-toolbar-field" value="{{ start_date or '' }}" title="Start date">
+
+                    <span class="text-secondary" aria-hidden="true">&ndash;</span>
+
+                    <label class="visually-hidden" for="grnEndDate">End date</label>
+                    <input type="date" name="end_date" id="grnEndDate" class="form-control form-control-sm grn-toolbar-field" value="{{ end_date or '' }}" title="End date">
+
+                    <label class="visually-hidden" for="grnSearchBox">Search supplier or bill</label>
+                    <input type="text" name="search" id="grnSearchBox" class="form-control form-control-sm grn-toolbar-search" placeholder="Search supplier or bill..." value="{{ search or '' }}">
+
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-search"></i> Filter</button>
+
+                    {% if search or start_date or end_date %}
+                    <a href="{{ url_for('grn') }}" class="btn btn-sm btn-outline-secondary" title="Clear the filter"><i class="bi bi-x-lg"></i> Clear</a>
+                    {% endif %}
+
+                </div>
+
+                <span class="grn-toolbar-sep" aria-hidden="true"></span>
+
+                <div class="grn-toolbar-group">
+
+                    <a href="{{ url_for('export_grn', search=search, start_date=start_date, end_date=end_date) }}" class="btn btn-sm btn-outline-success" title="Export these GRNs to Excel"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+
+                    <button type="button" class="btn btn-sm btn-outline-info" id="grnConsumptionRefresh" title="Recalculate the consumption bars from the stock ledger"><i class="bi bi-arrow-repeat"></i> <span data-refresh-label>Recalculate</span></button>
+
+                    <span class="small text-muted ms-1" id="grnLiveStatus" data-ledger-live-status aria-live="polite">Live</span>
+
+                </div>
+
+            </form>
+
+        </div>
+
+        <div class="card-body">
+
+            {% if grn_consumption and grn_consumption['items'] %}
+            {% set ov = namespace(received=0, consumed=0, remaining=0, lots=0, complete=0, replay=0) %}
+            {% for lot in grn_consumption['items'].values() %}
+                {% set ov.received = ov.received + (lot.received_value or 0) %}
+                {% set ov.consumed = ov.consumed + (lot.consumed_value or 0) %}
+                {% set ov.remaining = ov.remaining + (lot.remaining_value or 0) %}
+                {% set ov.lots = ov.lots + 1 %}
+                {% if lot.fully_consumed %}{% set ov.complete = ov.complete + 1 %}{% endif %}
+                {% if lot.status == 'reconstructed' %}{% set ov.replay = ov.replay + 1 %}{% endif %}
+            {% endfor %}
+            {% set ov_pct = ((ov.consumed / ov.received * 100) if ov.received else 0) %}
+            {% set ov_level = ('complete' if ov_pct >= 100 else ('critical' if ov_pct >= 75 else ('high' if ov_pct >= 50 else ('moderate' if ov_pct >= 25 else 'low')))) %}
+            <section class="grn-overview level-{{ ov_level }}" id="grnOverallMeter"
+                     data-received="{{ ov.received }}" data-consumed="{{ ov.consumed }}"
+                     title="Overall consumption of the stock received by the GRNs on this screen, valued at cost."
+                     aria-label="Overall stock consumption of the GRNs on this screen">
+                <span class="grn-overview-title">Overall consumption</span>
+                <span class="grn-overview-pct" data-overall-pct>{{ '{:,.1f}'.format(ov_pct) }}%</span>
+                <div class="grn-overview-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                     aria-valuenow="{{ '{:,.1f}'.format(ov_pct) }}"
+                     aria-valuetext="{{ '{:,.1f}'.format(ov_pct) }}% of received stock value consumed"
+                     data-overall-bar>
+                    <div class="grn-overview-fill" data-overall-fill style="width: {{ '%.2f'|format(ov_pct) }}%;"></div>
+                </div>
+                <span class="grn-overview-scope">across {{ grns|length }} GRNs &middot; valued at cost</span>
+                <span class="grn-overview-figures">
+                    <span>Received <b data-overall-received>Rs {{ '{:,.0f}'.format(ov.received) }}</b></span>
+                    <span>Consumed <b data-overall-consumed>Rs {{ '{:,.0f}'.format(ov.consumed) }}</b></span>
+                    <span>In hand <b data-overall-remaining>Rs {{ '{:,.0f}'.format(ov.remaining) }}</b></span>
+                </span>
+                <span class="grn-overview-meta">
+                    <span><b data-overall-lots>{{ ov.lots }}</b> lots &middot; <b data-overall-complete>{{ ov.complete }}</b> fully consumed &middot; <b data-overall-replay>{{ ov.replay }}</b> replayed</span>
+                    <span>Stock value <b data-overall-value>Rs {{ '{:,.0f}'.format(ov.remaining) }}</b></span>
+                </span>
+            </section>
+            {% endif %}
+
+            <div class="table-responsive">
+
+                <table class="table table-hover grn-table">
+
+                    <thead>
+
+                        <tr>
+
+                            <th class="grn-th-toggle"><span class="visually-hidden">Lot consumption details</span></th>
+
+                            <th class="grn-th-star"><i class="bi bi-star text-warning" title="Click star to highlight line"></i></th>
+
+                            <th>GRN #</th>
+
+                            <th><a href="{{ url_for('grn', sort='date', search=search, start_date=start_date, end_date=end_date) }}" class="grn-sort-link {{ 'is-active' if sort == 'date' }}">Date &amp; Time <i class="bi bi-arrow-down-up small"></i></a></th>
+
+                            <th><a href="{{ url_for('grn', sort='supplier', search=search, start_date=start_date, end_date=end_date) }}" class="grn-sort-link {{ 'is-active' if sort == 'supplier' }}">Supplier <i class="bi bi-arrow-down-up small"></i></a></th>
+
+                            <th>Items<span class="grn-th-sub">arrow on the left opens each lot's consumption</span></th>
+
+                            <th class="grn-col-num">Total Qty</th>
+
+                            <th class="grn-col-num">Discount</th>
+
+                            <th class="text-end grn-actions-cell">Actions</th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody>
+
+                        {% for grn in grns %}
+
+                        {% set live_items = grn.items | rejectattr('is_void') | list %}
+                        <tr class="grn-row" data-grn-row="{{ grn.id }}">
+
+                            <td class="grn-td-toggle">
+                                <button type="button" class="grn-expand-btn" data-grn-expand="grnDetails{{ grn.id }}"
+                                        aria-expanded="false" aria-controls="grnDetails{{ grn.id }}"
+                                        data-label-show="Show lot consumption details" data-label-hide="Hide lot consumption details"
+                                        data-grn-label="GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}"
+                                        title="Show lot consumption details"
+                                        aria-label="Show lot consumption details for GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}">
+                                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                                </button>
+                            </td>
+
+                            <td class="grn-td-star">
+                                <span class="row-star-btn" data-row-id="grn-{{ grn.id }}" title="Highlight entry">
+                                    <i class="bi bi-star"></i>
+                                </span>
+                            </td>
+
+                            <td>
+                                {% if grn.auto_bill_no %}<span class="badge bg-info text-dark me-1">{{ grn.auto_bill_no }}</span>{% endif %}
+                                {% if grn.manual_bill_no %}<span class="badge bg-warning text-dark">{{ grn.manual_bill_no }}</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if grn.date_posted %}
+                                    <div class="fw-bold">{{ grn.date_posted.strftime('%d/%b/%Y') }}</div>
+                                    <div class="small text-muted"><i class="bi bi-clock me-1"></i>{{ grn.date_posted.strftime('%I:%M %p') }}</div>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+
+                            <td class="grn-supplier">{{ grn.supplier }}</td>
+
+                            <td class="grn-items-cell">
+                                {% if live_items %}
+                                <span class="grn-items-line" title="{{ live_items | map(attribute='mat_name') | join(' · ') }}">
+                                    {% for item in live_items[:2] %}
+                                        {% if not loop.first %}<span class="grn-item-sep">&middot;</span>{% endif %}<span class="grn-item-name">{{ item.mat_name }}</span> <b>{{ '{:,.2f}'.format(item.qty or 0) }}</b>
+                                    {% endfor %}
+                                    {% if live_items|length > 2 %}<span class="grn-item-sep">&middot;</span><span class="grn-items-more">+{{ live_items|length - 2 }} more</span>{% endif %}
+                                </span>
+                                {% else %}
+                                <span class="grn-items-empty">No active lines</span>
+                                {% endif %}
+                            </td>
+
+                            <td class="grn-col-num">
+                                {% set total_qty = namespace(value=0) %}{% for item in live_items %}{% set total_qty.value = total_qty.value + (item.qty or 0) %}{% endfor %}
+                                <span class="grn-qty">{{ '{:,.2f}'.format(total_qty.value) }}</span>
+                                <span class="grn-qty-label">{{ live_items|length }} line{{ '' if live_items|length == 1 else 's' }}</span>
+                            </td>
+
+                            <td class="grn-col-num">{{ '{:,.2f}'.format(grn.discount or 0) }}</td>
+
+                            <td class="grn-actions-cell">
+
+                                <div class="grn-row-actions">
+
+                                    <a href="{{ url_for('view_bill', bill_no=grn.manual_bill_no or grn.auto_bill_no, src='grn', src_id=grn.id) }}"
+                                       class="btn btn-sm btn-outline-info"
+                                       title="View this GRN" aria-label="View GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}"><i class="bi bi-eye"></i></a>
+
+                                    <a href="{{ url_for('download_invoice', bill_no=grn.manual_bill_no or grn.auto_bill_no, src='grn', src_id=grn.id) }}"
+                                       class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener"
+                                       title="Print this GRN" aria-label="Print GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}"><i class="bi bi-printer"></i></a>
+
+                                    <a href="{{ url_for('edit_grn', id=grn.id) }}"
+                                       class="btn btn-sm btn-outline-warning"
+                                       title="Edit this GRN" aria-label="Edit GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}"><i class="bi bi-pencil"></i></a>
+
+                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                            data-bs-toggle="modal" data-bs-target="#shiftGrnModal{{ grn.id }}"
+                                            title="Shift this GRN to another supplier (preserves inventory &amp; sales)"
+                                            aria-label="Shift GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }} to another supplier"><i class="bi bi-arrow-left-right"></i></button>
+
+                                    <form action="{{ url_for('grn') }}" method="POST" class="grn-action-form" onsubmit="return confirm('Are you sure you want to delete this GRN? This will reverse the stock addition.');">
+
+                                        <input type="hidden" name="action" value="delete">
+
+                                        <input type="hidden" name="id" value="{{ grn.id }}">
+
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                title="Delete this GRN" aria-label="Delete GRN {{ grn.manual_bill_no or grn.auto_bill_no or grn.id }}"><i class="bi bi-trash"></i></button>
+
+                                    </form>
+
+                                </div>
+
+                                <div class="modal fade" id="shiftGrnModal{{ grn.id }}" tabindex="-1" aria-hidden="true">
+                                    <div class="modal-dialog">
+                                        <form action="{{ url_for('shift_grn_supplier', id=grn.id) }}" method="POST" class="modal-content bg-dark text-white border-secondary">
+                                            <div class="modal-header border-secondary">
+                                                <h5 class="modal-title text-info"><i class="bi bi-arrow-right-circle me-2"></i>Shift GRN Supplier</h5>
+                                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <p class="text-white-50 small">Move GRN <strong>{{ grn.auto_bill_no or grn.id }}</strong> from <strong>{{ grn.supplier }}</strong> to the correct supplier. Inventory and existing sales are preserved.</p>
+                                                <select name="target_supplier_id" class="form-select bg-dark text-white border-secondary" required>
+                                                    <option value="">-- Select correct supplier --</option>
+                                                    {% for ts in suppliers %}
+                                                    {% if ts.name != grn.supplier %}
+                                                    <option value="{{ ts.id }}">{{ ts.name }}</option>
+                                                    {% endif %}
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="modal-footer border-secondary">
+                                                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                                                <button type="submit" class="btn btn-info btn-sm fw-bold text-dark" onclick="return confirm('Shift this GRN to the selected supplier?');">Shift</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+
+                            </td>
+
+                        </tr>
+
+                        <tr class="grn-details-row" id="grnDetails{{ grn.id }}" hidden>
+                            <td colspan="9">
+                                <div class="grn-details">
+                                    <div class="grn-details-head">
+                                        <span class="grn-details-title"><i class="bi bi-box-seam me-1"></i>Consumption by lot</span>
+                                        <span class="grn-details-note">{{ live_items|length }} line{{ '' if live_items|length == 1 else 's' }} on this GRN &middot; every lot keeps its own purchase rate and FIFO consumption</span>
+                                    </div>
+                                    <div class="grn-lot-list">
+                                        {% for item in live_items %}
+                                        {% set lot = (grn_consumption['items'].get(item.id) if grn_consumption else None) %}
+                                        {% set received = lot.received_qty if lot else (item.qty or 0) %}
+                                        {% set consumed = lot.consumed_qty if lot else 0 %}
+                                        {% set remaining = lot.remaining_qty if lot else (item.qty or 0) %}
+                                        {% set pct = lot.consumed_pct if lot else 0 %}
+                                        {% set level = lot.level if lot else 'low' %}
+                                        {% set rate = (lot.rate if lot else (item.price_at_time or 0)) or 0 %}
+                                        {% set unit = (lot.unit if lot else '') or '' %}
+                                        <div class="grn-item-consume" data-grn-scope>
+                                            <div class="grn-consume-head">
+                                                <span class="grn-consume-name">{{ item.mat_name }}</span>
+                                                {% if rate %}<span class="grn-consume-meta">@ Rs {{ '{:,.2f}'.format(rate) }}</span>{% endif %}
+                                                {% if lot and lot.status in ['recorded', 'reconstructed'] %}
+                                                <span class="grn-consume-status {{ 'is-recorded' if lot.status == 'recorded' else 'is-reconstructed' }}"
+                                                      title="{{ 'Consumed through posted FIFO allocations' if lot.status == 'recorded' else 'Consumed through the FIFO movement replay (no posted allocation for this lot)' }}">{{ lot.status }}</span>
+                                                {% endif %}
+                                                {% if lot %}<span class="grn-consume-meta">In hand <b>Rs {{ '{:,.0f}'.format(lot.remaining_value or 0) }}</b></span>{% endif %}
+                                            </div>
+                                            <div class="grn-lot-meter">
+                                                <div class="grn-lot-figures">
+                                                    <span class="fig-received">Received <b data-grn-received>{{ '{:,.2f}'.format(received) }}</b>{% if unit %} {{ unit }}{% endif %}</span>
+                                                    <span class="fig-consumed">Consumed <b data-grn-consumed>{{ '{:,.2f}'.format(consumed) }}</b></span>
+                                                    <span class="fig-remaining">Remaining <b data-grn-remaining>{{ '{:,.2f}'.format(remaining) }}</b></span>
+                                                </div>
+                                                <div class="grn-consume level-{{ level }}" data-grn-consume data-grn-item-id="{{ item.id }}"
+                                                     data-received="{{ received }}" data-consumed="{{ consumed }}" data-percent="{{ pct }}">
+                                                    <div class="grn-consume-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                         aria-valuenow="{{ pct }}" aria-valuetext="{{ pct }}% consumed"
+                                                         title="{{ '%.2f'|format(consumed) }} of {{ '%.2f'|format(received) }} consumed">
+                                                        <div class="grn-consume-fill level-{{ level }}" style="width: {{ pct }}%;"></div>
+                                                    </div>
+                                                    <span class="grn-consume-pct">{{ '{:,.1f}'.format(pct) }}%</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% else %}
+                                        <span class="grn-items-empty">No active lines on this GRN.</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+
+                        {% endfor %}
+
+                    </tbody>
+
+                </table>
+
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+
+<!-- Add Supplier Modal -->
+
+<div class="modal fade" id="addSupplierModal" tabindex="-1">
+
+    <div class="modal-dialog">
+        <form action="{{ url_for('add_supplier') }}" method="POST" class="modal-content bg-dark text-white border-secondary" id="addSupplierForm">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title text-warning">Add New Supplier</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label text-white-50">Name</label>
+                    <input type="text" name="name" class="form-control bg-dark text-white border-secondary" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-white-50">Phone</label>
+                    <input type="text" name="phone" class="form-control bg-dark text-white border-secondary">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-white-50">Address</label>
+                    <input type="text" name="address" class="form-control bg-dark text-white border-secondary">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-white-50">Opening Balance</label>
+                    <input type="number" step="0.01" name="opening_balance" class="form-control bg-dark text-white border-secondary" value="0">
+                    <small class="text-white-50">Use + for payable due, - for advance/prepaid.</small>
+                </div>
+            </div>
+            <div class="modal-footer border-secondary">
+                <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Close</button>
+                <button type="submit" class="btn btn-warning text-dark fw-bold">Save Supplier</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<script>
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Manual date/time override: the Date and Time boxes are always
+    // editable (add and edit).  This button simply puts the system clock
+    // back into them when the operator wants the current moment instead of
+    // a hand-typed one.  The values come from the server (PK timezone), not
+    // from the browser clock.
+    const grnUseNowBtn = document.getElementById('grnUseNowBtn');
+    if (grnUseNowBtn) {
+        grnUseNowBtn.addEventListener('click', function() {
+            const dateInput = document.getElementById('grnDateInput');
+            const timeInput = document.getElementById('grnTimeInput');
+            const sysDate = this.getAttribute('data-sys-date') || '';
+            const sysTime = this.getAttribute('data-sys-time') || '';
+            if (dateInput && sysDate) { dateInput.value = sysDate; dateInput.classList.remove('is-invalid'); }
+            if (timeInput && sysTime) { timeInput.value = sysTime; timeInput.classList.remove('is-invalid'); }
+        });
+    }
+
+    function formatNumber(value) {
+        const num = Number(value || 0);
+        return num.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 12});
+    }
+
+    function updateGrnTotal() {
+        let total = 0;
+        document.querySelectorAll('#grnItemsTable tbody tr').forEach(row => {
+            const qtyInput = row.querySelector('input[name="qty[]"]');
+            const priceInput = row.querySelector('input[name="price[]"]');
+            const totalCell = row.querySelector('.grn-row-total');
+            if (qtyInput && priceInput) {
+                const lineTotal = (parseFloat(qtyInput.value) || 0) * (parseFloat(priceInput.value) || 0);
+                if (totalCell) totalCell.textContent = formatNumber(lineTotal);
+                total += lineTotal;
+            }
+        });
+        
+        const discount = parseFloat(document.getElementById('grnDiscount').value || 0);
+        total = Math.max(0, total - discount);
+        
+        document.getElementById('grnTotalAmount').innerText = formatNumber(total);
+    }
+
+
+    document.querySelectorAll('.next-step').forEach(btn => {
+
+        btn.addEventListener('click', function() {
+
+            const nextId = this.getAttribute('data-next');
+
+            const currentStep = this.closest('.step-section');
+
+            const inputs = currentStep.querySelectorAll('input[required], select[required]');
+
+            let valid = true;
+
+            inputs.forEach(input => {
+
+                if (!input.value) { valid = false; input.classList.add('is-invalid'); } 
+
+                else { input.classList.remove('is-invalid'); }
+
+            });
+
+            if (valid) {
+
+                document.getElementById(nextId).style.display = 'block';
+
+                document.getElementById(nextId).scrollIntoView({behavior: 'smooth'});
+
+            } else { alert('Please fill all required fields.'); }
+
+        });
+
+    });
+
+
+
+    window.selectSupplier = function(name, id) {
+
+        document.getElementById('supplierInput').value = name;
+
+        document.getElementById('supplier_id').value = id;
+
+        document.getElementById('supplierCombobox').style.display = 'none';
+
+        updateSupplierBalance(id);
+
+    };
+
+
+
+    function updateSupplierBalance(id) {
+
+        if (!id) return;
+
+        const display = document.getElementById('supplierBalanceDisplay');
+
+        display.innerHTML = '<span class="text-white-50 small">Loading balance...</span>';
+
+        
+
+        fetch(`/api/supplier_balance/${id}`)
+
+            .then(response => response.json())
+
+            .then(data => {
+
+                const bal = data.balance;
+
+                if (bal > 0) {
+
+                    display.innerHTML = `<span class="badge bg-danger">Payable: ${bal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
+
+                } else if (bal < 0) {
+
+                    display.innerHTML = `<span class="badge bg-success">Advance: ${Math.abs(bal).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
+
+                } else {
+
+                    display.innerHTML = `<span class="badge bg-secondary">Settled: 0.00</span>`;
+
+                }
+
+            })
+
+            .catch(err => {
+
+                console.error(err);
+
+                display.innerHTML = '';
+
+            });
+
+    }
+
+
+
+    window.selectMaterial = function(name, price) {
+        document.getElementById('itemSearch').value = name;
+        document.getElementById('selectedItemName').value = name;
+        const priceInput = document.getElementById('selectedItemPrice');
+        if (!priceInput.value) {
+            priceInput.value = price || 0;
+        }
+        // Reset quantity to 1 when item changes
+        document.getElementById('selectedItemQty').value = '1';
+        document.getElementById('materialCombobox').style.display = 'none';
+        document.getElementById('step3').style.display = 'block';
+        document.getElementById('step3').scrollIntoView({behavior: 'smooth'});
+    };
+
+    // Use data attributes rather than inline JavaScript so names containing
+    // quotes remain selectable and safe.
+    document.querySelectorAll('#materialCombobox .combobox-item').forEach(item => {
+        item.addEventListener('click', function() {
+            window.selectMaterial(
+                this.getAttribute('data-name') || '',
+                this.getAttribute('data-price') || ''
+            );
+        });
+    });
+
+    const itemSearch = document.getElementById('itemSearch');
+    itemSearch.addEventListener('change', function() {
+        const val = this.value.trim().toLowerCase();
+
+        if(!val) return;
+
+        const items = document.querySelectorAll('#materialCombobox .combobox-item');
+
+        for (let item of items) {
+
+            const code = (item.getAttribute('data-code') || '').toLowerCase();
+
+            const name = (item.getAttribute('data-name') || '').toLowerCase();
+
+            if (code === val || name === val) {
+
+                selectMaterial(item.getAttribute('data-name'), item.getAttribute('data-price'));
+
+                break;
+
+            }
+
+        }
+
+    });
+
+
+
+    function appendSelectedGrnItem() {
+        const nameInput = document.getElementById('selectedItemName');
+        const priceInput = document.getElementById('selectedItemPrice');
+        const qtyInput = document.getElementById('selectedItemQty');
+        const name = (nameInput.value || '').trim();
+        const qtyRaw = (qtyInput.value || '').trim();
+        const priceRaw = (priceInput.value || '').trim();
+        const qty = Number(qtyRaw);
+        const price = priceRaw === '' ? 0 : Number(priceRaw);
+
+        if (!name) {
+            alert('Please select an item first.');
+            return false;
+        }
+        if (!qtyRaw || !Number.isFinite(qty) || qty <= 0) {
+            alert('Please enter a quantity greater than zero.');
+            return false;
+        }
+        if (!Number.isFinite(price) || price < 0) {
+            alert('Please enter a valid item price.');
+            return false;
+        }
+
+        // Keep the markup static and set user-provided values as DOM values;
+        // names containing quotes/special characters remain a single line.
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><input type="hidden" name="grn_item_id[]" value=""><input type="text" class="form-control form-control-sm grn-item-name" name="mat_name[]" readonly></td>
+            <td><input type="number" class="form-control grn-item-qty" name="qty[]" step="any" min="0" inputmode="decimal" style="font-size: 1.05rem; font-weight: bold;"></td>
+            <td><input type="number" class="form-control form-control-sm grn-item-price" name="price[]" step="any" min="0" inputmode="decimal"></td>
+            <td class="grn-row-total text-end" style="font-weight: bold; font-size: 1.05rem;"></td>
+            <td><button type="button" class="btn btn-danger btn-sm remove-row" title="Remove item"><i class="bi bi-trash"></i></button></td>
+        `;
+        row.querySelector('input[name="mat_name[]"]').value = name;
+        row.querySelector('input[name="qty[]"]').value = String(qty);
+        row.querySelector('input[name="price[]"]').value = String(price);
+        row.querySelector('.grn-row-total').textContent = formatNumber(price * qty);
+        document.querySelector('#grnItemsTable tbody').appendChild(row);
+        updateGrnTotal();
+        itemSearch.value = '';
+        nameInput.value = '';
+        priceInput.value = '';
+        qtyInput.value = '1';
+        return true;
+    }
+
+    document.getElementById('addItemBtn').addEventListener('click', function() {
+        if (appendSelectedGrnItem()) {
+            itemSearch.focus();
+        }
+    });
+
+    // If the user selected/filled the next item but presses Save without
+    // clicking Add, include that pending line rather than silently saving only
+    // the rows already added to the table.
+    const grnForm = document.getElementById('grnForm');
+    if (grnForm) {
+        grnForm.addEventListener('submit', function(event) {
+            if ((document.getElementById('selectedItemName').value || '').trim()
+                    && !appendSelectedGrnItem()) {
+                event.preventDefault();
+            }
+        });
+    }
+
+    const resetCurrentItemBtn = document.getElementById('resetCurrentItemBtn');
+    if (resetCurrentItemBtn) {
+        resetCurrentItemBtn.addEventListener('click', function() {
+            itemSearch.value = '';
+            document.getElementById('selectedItemName').value = '';
+            document.getElementById('selectedItemPrice').value = '';
+            document.getElementById('selectedItemQty').value = '1';
+            itemSearch.focus();
+        });
+    }
+
+    document.querySelector('#grnItemsTable').addEventListener('click', function(e) {
+        if (e.target.closest('.remove-row')) {
+            e.target.closest('tr').remove();
+            updateGrnTotal();
+        }
+    });
+
+    document.querySelector('#grnItemsTable').addEventListener('input', function(e) {
+        if (e.target.matches('.grn-item-qty, .grn-item-price')) {
+            updateGrnTotal();
+        }
+    });
+
+
+    // Handle Add Supplier Form
+
+    const addSupplierForm = document.getElementById('addSupplierForm');
+
+    if (addSupplierForm) {
+
+        addSupplierForm.addEventListener('submit', function(e) {
+
+            e.preventDefault();
+
+            const formData = new FormData(this);
+
+            fetch(this.action + '?ajax=1', {
+
+                method: 'POST',
+
+                body: formData
+
+            })
+
+            .then(response => response.json())
+
+            .then(data => {
+
+                if (data.success) {
+
+                    // Add to combobox
+
+                    const combobox = document.getElementById('supplierCombobox');
+
+                    const div = document.createElement('div');
+
+                    div.className = 'combobox-item';
+
+                    div.innerHTML = `<span class="text-white fw-bold">${data.name}</span>`;
+
+                    div.onclick = function() { selectSupplier(data.name, data.id); };
+
+                    combobox.appendChild(div);
+
+                    
+
+                    // Select it
+
+                    selectSupplier(data.name, data.id);
+
+                    
+
+                    // Close modal
+
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('addSupplierModal'));
+
+                    modal.hide();
+
+                    this.reset();
+
+                } else {
+
+                    alert('Error adding supplier');
+
+                }
+
+            })
+
+            .catch(error => console.error('Error:', error));
+
+        });
+
+    }
+
+
+
+    // Initial balance check if editing
+
+    const initialSupplierId = document.getElementById('supplier_id').value;
+
+    if (initialSupplierId) {
+
+        updateSupplierBalance(initialSupplierId);
+
+    }
+
+
+
+    // Toggle Bank Details
+    const paymentTypeSelect = document.getElementById('paymentTypeSelect');
+    const bankDetailsSection = document.getElementById('bankDetailsSection');
+    const paymentAccountSection = document.getElementById('paymentAccountSection');
+    const paymentAccountSelect = document.getElementById('paymentAccountSelect');
+    const bankNameInput = document.getElementById('bankNameInput');
+    const bankAccountHolderInput = document.getElementById('bankAccountHolderInput');
+    const bankAccountNoInput = document.getElementById('bankAccountNoInput');
+
+    function toggleBankDetails() {
+        bankDetailsSection.style.display = (paymentTypeSelect.value === 'Bank Transfer') ? 'flex' : 'none';
+    }
+
+    function togglePaymentAccount() {
+        if (!paymentAccountSection || !paymentAccountSelect || !paymentTypeSelect) return;
+        const pt = (paymentTypeSelect.value || '').trim();
+        const show = (pt === 'Cash' || pt === 'Bank Transfer');
+        paymentAccountSection.style.display = show ? 'flex' : 'none';
+
+        const expected = (pt === 'Cash') ? 'cash' : ((pt === 'Bank Transfer') ? 'bank' : '');
+        for (const opt of paymentAccountSelect.options) {
+            if (!opt.value) continue;
+            const cat = (opt.dataset.category || '').trim().toLowerCase();
+            const ok = !expected || cat === expected;
+            opt.hidden = !ok;
+            opt.disabled = !ok;
+        }
+        const selectedOpt = paymentAccountSelect.options[paymentAccountSelect.selectedIndex];
+        if (selectedOpt && selectedOpt.disabled) {
+            paymentAccountSelect.value = '';
+        }
+        if (!show) {
+            paymentAccountSelect.value = '';
+        }
+    }
+
+    function syncBankFieldsFromAccount() {
+        if (!paymentTypeSelect || !paymentAccountSelect) return;
+        if ((paymentTypeSelect.value || '').trim() !== 'Bank Transfer') return;
+        const opt = paymentAccountSelect.options[paymentAccountSelect.selectedIndex];
+        if (!opt || !opt.value) return;
+        const cat = (opt.dataset.category || '').trim().toLowerCase();
+        if (cat !== 'bank') return;
+        if (bankNameInput) bankNameInput.value = opt.dataset.bank || '';
+        if (bankAccountHolderInput) bankAccountHolderInput.value = opt.dataset.holder || '';
+        if (bankAccountNoInput) bankAccountNoInput.value = opt.dataset.no || '';
+    }
+
+    if (paymentTypeSelect) {
+        paymentTypeSelect.addEventListener('change', function () {
+            toggleBankDetails();
+            togglePaymentAccount();
+            syncBankFieldsFromAccount();
+        });
+        // Initial check is handled by inline style, but this ensures consistency if JS loads late
+    }
+    if (paymentAccountSelect) {
+        paymentAccountSelect.addEventListener('change', syncBankFieldsFromAccount);
+    }
+    togglePaymentAccount();
+    syncBankFieldsFromAccount();
+
+    const discountInput = document.getElementById('grnDiscount');
+    if (discountInput) {
+        discountInput.addEventListener('input', updateGrnTotal);
+    }
+    updateGrnTotal();
+
+    const grnStorageKey = 'ams_starred_grn_entries';
+    let grnStarred = new Set();
+    try {
+        const stored = localStorage.getItem(grnStorageKey);
+        if (stored) {
+            grnStarred = new Set(JSON.parse(stored));
+        }
+    } catch (e) {}
+
+    function syncGrnStarUi(btn, isStarred) {
+        const tr = btn.closest('tr');
+        const icon = btn.querySelector('i');
+        if (isStarred) {
+            btn.classList.add('starred');
+            if (icon) {
+                icon.className = 'bi bi-star-fill text-warning';
+            }
+            if (tr) {
+                tr.classList.add('entry-highlighted');
+            }
+        } else {
+            btn.classList.remove('starred');
+            if (icon) {
+                icon.className = 'bi bi-star';
+            }
+            if (tr) {
+                tr.classList.remove('entry-highlighted');
+            }
+        }
+    }
+
+    document.querySelectorAll('.row-star-btn').forEach(btn => {
+        const id = btn.getAttribute('data-row-id');
+        if (id && grnStarred.has(id)) {
+            syncGrnStarUi(btn, true);
+        }
+
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            const rowId = this.getAttribute('data-row-id');
+            const nowStarred = !this.classList.contains('starred');
+            syncGrnStarUi(this, nowStarred);
+            if (rowId) {
+                if (nowStarred) {
+                    grnStarred.add(rowId);
+                } else {
+                    grnStarred.delete(rowId);
+                }
+                try {
+                    localStorage.setItem(grnStorageKey, JSON.stringify(Array.from(grnStarred)));
+                } catch (e) {}
+            }
+        });
+    });
+
+    // ---- Stock-consumption indicator: server data, JS rendering ----
+    // The bars are already rendered from the authoritative server projection;
+    // this only repaints them and lets the operator pull a fresh replay after
+    // a dispatch, return or adjustment without reloading the page.
+    var consumptionRefreshBtn = document.getElementById('grnConsumptionRefresh');
+    if (consumptionRefreshBtn && window.FBMGrnConsumption) {
+        var refreshDefaultTitle = consumptionRefreshBtn.getAttribute('title');
+        var refreshLabel = consumptionRefreshBtn.querySelector('[data-refresh-label]');
+        consumptionRefreshBtn.addEventListener('click', function () {
+            var button = this;
+            var icon = button.querySelector('i');
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+            // theme.css has no global .spin class; .grn-refresh-spin is defined
+            // in this page's stylesheet, so the icon actually turns now.
+            if (icon) icon.classList.add('grn-refresh-spin');
+            if (refreshLabel) refreshLabel.textContent = 'Working…';
+            // theme.css defines .btn-outline-info after .btn-outline-danger and
+            // .btn-outline-success, so the base class has to come off for the
+            // success/failure colour to be the one that actually paints.
+            button.classList.remove('btn-outline-info');
+            window.FBMGrnConsumption.refresh('/api/grn_consumption').then(function (payload) {
+                if (payload === false) {
+                    button.classList.add('btn-outline-danger');
+                    button.title = 'Could not refresh from the stock ledger — the values on screen are unchanged.';
+                    if (refreshLabel) refreshLabel.textContent = 'Failed';
+                    window.setTimeout(function () {
+                        button.classList.remove('btn-outline-danger');
+                        button.classList.add('btn-outline-info');
+                        button.title = refreshDefaultTitle;
+                        if (refreshLabel) refreshLabel.textContent = 'Recalculate';
+                    }, 2400);
+                } else {
+                    button.classList.add('btn-outline-success');
+                    if (refreshLabel) refreshLabel.textContent = 'Updated';
+                    window.setTimeout(function () {
+                        button.classList.remove('btn-outline-success');
+                        button.classList.add('btn-outline-info');
+                        if (refreshLabel) refreshLabel.textContent = 'Recalculate';
+                    }, 1400);
+                }
+            }).catch(function () {
+                button.classList.add('btn-outline-info');
+            }).finally(function () {
+                button.disabled = false;
+                button.removeAttribute('aria-busy');
+                if (icon) icon.classList.remove('grn-refresh-spin');
+            });
+        });
+    }
+});
+</script>
+<script src="{{ url_for('static', filename='grn_consumption.js') }}?v=3"></script>
+<script src="{{ url_for('static', filename='ledger_live.js') }}?v=1"></script>
+<script>
+  if (window.FBMLedgerLive) {
+    window.FBMLedgerLive.init({ grn: true, status: '#grnLiveStatus' });
+  }
+</script>
+
+{% endblock %}
