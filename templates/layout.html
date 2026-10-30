@@ -89,50 +89,173 @@
 
         .nav-link {
             color: var(--text-muted);
-            padding: 12px 25px;
+            padding: 10px 20px;
             display: flex;
             align-items: center;
             font-weight: 500;
-            border-left: 4px solid transparent;
-            transition: 0.2s;
+            font-size: 0.92rem;
+            border-left: 3px solid transparent;
+            transition: color 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
             text-decoration: none;
+            user-select: none;
         }
 
         .nav-link:hover, .nav-link.active {
             color: var(--accent);
-            background: rgba(251, 191, 36, 0.05);
-            border-left: 4px solid var(--accent);
+            background: rgba(251, 191, 36, 0.06);
+            border-left-color: var(--accent);
         }
 
-        .nav-link i { font-size: 1.2rem; margin-right: 15px; }
+        .nav-link i {
+            font-size: 1.12rem;
+            margin-right: 13px;
+            width: 20px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .nav-divider {
+            height: 1px;
+            margin: 8px 18px;
+            background: var(--border-color);
+            opacity: 0.55;
+        }
+
+        .nav-group {
+            margin: 2px 0;
+        }
+
         .nav-toggle-btn {
             width: 100%;
             background: transparent;
             border: 0;
+            border-left: 3px solid transparent;
             text-align: left;
             justify-content: space-between;
+            cursor: pointer;
+            font-weight: 600;
+            letter-spacing: 0.01em;
         }
+
+        .nav-toggle-btn.is-open {
+            color: var(--text-primary) !important;
+            background: rgba(148, 163, 184, 0.06) !important;
+        }
+
+        .nav-toggle-btn.has-active {
+            border-left-color: var(--accent);
+            color: var(--text-primary) !important;
+        }
+
+        .nav-toggle-btn.has-active:not(.is-open) {
+            color: var(--accent) !important;
+            background: var(--accent-soft) !important;
+        }
+
+        .nav-toggle-btn:hover {
+            color: var(--accent) !important;
+            background: var(--accent-soft) !important;
+        }
+
         .nav-toggle-label {
             display: inline-flex;
             align-items: center;
+            min-width: 0;
         }
+
+        .nav-toggle-meta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .nav-active-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: 0;
+            transform: scale(0.6);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+
+        .nav-toggle-btn.has-active:not(.is-open) .nav-active-dot {
+            opacity: 1;
+            transform: scale(1);
+        }
+
         .nav-caret {
             margin-right: 0 !important;
-            font-size: 0.9rem !important;
-            transition: transform 0.2s ease;
+            width: auto !important;
+            font-size: 0.82rem !important;
+            opacity: 0.78;
+            transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease;
         }
+
+        .nav-toggle-btn:hover .nav-caret,
+        .nav-toggle-btn.is-open .nav-caret {
+            opacity: 1;
+        }
+
         .nav-caret.rotated {
             transform: rotate(180deg);
         }
+
         .nav-submenu {
-            display: none;
+            display: grid;
+            grid-template-rows: 0fr;
+            opacity: 0;
+            visibility: hidden;
+            transition:
+                grid-template-rows 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 0.18s ease,
+                visibility 0s linear 0.22s;
         }
+
         .nav-submenu.show {
-            display: block;
+            grid-template-rows: 1fr;
+            opacity: 1;
+            visibility: visible;
+            transition:
+                grid-template-rows 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 0.18s ease,
+                visibility 0s linear 0s;
         }
+
+        .nav-submenu-inner {
+            overflow: hidden;
+            min-height: 0;
+            position: relative;
+        }
+
+        .nav-submenu-inner::before {
+            content: "";
+            position: absolute;
+            left: 30px;
+            top: 4px;
+            bottom: 8px;
+            width: 1.5px;
+            background: var(--border-color);
+            opacity: 0.65;
+            pointer-events: none;
+        }
+
         .nav-submenu .nav-link {
-            padding-left: 56px;
-            font-size: 0.95rem;
+            padding: 8px 18px 8px 46px;
+            font-size: 0.88rem;
+            font-weight: 500;
+            border-left: 3px solid transparent;
+        }
+
+        .nav-submenu .nav-link i {
+            font-size: 1rem;
+            margin-right: 10px;
+            width: 18px;
+        }
+
+        .nav-submenu .nav-link.active {
+            font-weight: 600;
         }
 
         /* Shared buttons use a restrained lift instead of mismatched neon glows. */
@@ -442,161 +565,353 @@
         </div>
 
         <div class="sidebar-nav-container">
-            <nav class="py-3">
+            <nav class="py-2" aria-label="Primary Navigation">
                 {% if current_user.role != 'root' %}
-                {% if current_user.can_view_dashboard or current_user.role == 'admin' %}
-                <a href="/" class="nav-link {{ 'active' if request.path == '/' }}" onclick="closeSidebar()">
+                {% set is_admin = (current_user.role == 'admin') %}
+                {% set req_path = request.path %}
+                {% set req_src = request.args.get('src', '') %}
+
+                {# --- Permissions (aligned with backend ENDPOINT_PERMISSION_MAP) --- #}
+                {% set can_dashboard = user_can('can_view_dashboard') if user_can is defined else (current_user.can_view_dashboard or is_admin) %}
+
+                {% set can_inv_stock = user_can('can_view_stock') if user_can is defined else (current_user.can_view_stock or is_admin) %}
+                {% set can_inv_daily = user_can('can_view_daily') if user_can is defined else (current_user.can_view_daily or is_admin) %}
+                {% set can_inv_history = user_can('can_view_history') if user_can is defined else (current_user.can_view_history or is_admin) %}
+
+                {% set can_tx_grn = user_can('can_manage_grn') if user_can is defined else (current_user.can_manage_grn or is_admin) %}
+                {% set can_tx_booking = user_can('can_manage_bookings') if user_can is defined else (current_user.can_manage_bookings or is_admin) %}
+                {% set can_tx_sale = user_can('can_manage_sales') if user_can is defined else (current_user.can_manage_sales or is_admin) %}
+                {% set can_tx_pending_bills = user_can('can_manage_pending_bills') if user_can is defined else (current_user.can_manage_pending_bills or is_admin) %}
+                {% set can_tx_delivery_rent = user_can('can_view_delivery_rent') if user_can is defined else (current_user.can_view_delivery_rent or is_admin) %}
+
+                {% set can_acc_payments = user_can('can_manage_payments') if user_can is defined else (current_user.can_manage_payments or is_admin) %}
+                {% set can_acc_accounts = (user_can('can_manage_accounts') or user_can('can_manage_payments')) if user_can is defined else (current_user.can_manage_accounts or current_user.can_manage_payments or is_admin) %}
+                {% set can_acc_cashflow = user_can('can_view_cash_flow') if user_can is defined else (current_user.can_view_cash_flow or is_admin) %}
+                {% set can_acc_pay_supplier = (user_can('can_view_supplier_ledger') and can_acc_accounts) if user_can is defined else ((current_user.can_view_supplier_ledger or is_admin) and can_acc_accounts) %}
+                {% set can_acc_profit = user_can('can_view_reports') if user_can is defined else (current_user.can_view_reports or is_admin) %}
+
+                {% set can_ldg_supplier = user_can('can_view_supplier_ledger') if user_can is defined else (current_user.can_view_supplier_ledger or is_admin) %}
+                {% set can_ldg_client = user_can('can_view_client_ledger') if user_can is defined else (current_user.can_view_client_ledger or is_admin) %}
+                {% set can_ldg_driver = user_can('can_view_delivery_rent') if user_can is defined else (current_user.can_view_delivery_rent or is_admin) %}
+                {% set can_ldg_decision = user_can('can_view_decision_ledger') if user_can is defined else (current_user.can_view_decision_ledger or is_admin) %}
+                {% set can_ldg_payables = user_can('can_view_reports') if user_can is defined else (current_user.can_view_reports or is_admin) %}
+                {% set can_ldg_notifications = user_can('can_manage_notifications') if user_can is defined else (current_user.can_manage_notifications or is_admin) %}
+
+                {% set can_dir_materials = user_can('can_manage_materials') if user_can is defined else (current_user.can_manage_materials or is_admin) %}
+                {% set can_dir_drivers = user_can('can_manage_delivery_persons') if user_can is defined else (current_user.can_manage_delivery_persons or is_admin) %}
+
+                {% set can_sys_ie = user_can('can_import_export') if user_can is defined else (current_user.can_import_export or is_admin) %}
+                {% set can_sys_settings = user_can('can_access_settings') if user_can is defined else (current_user.can_access_settings or is_admin) %}
+
+                {# --- Top Direct Link: Dashboard --- #}
+                {% if can_dashboard %}
+                <a href="/" class="nav-link {{ 'active' if req_path == '/' }}" onclick="closeSidebar()">
                     <i class="bi bi-speedometer2"></i> Dashboard
                 </a>
+                <div class="nav-divider"></div>
                 {% endif %}
 
-                <div class="text-white-50 small fw-bold px-4 mt-4 mb-2 text-uppercase" style="font-size: 0.7rem;">Inventory</div>
-                
-                {% if current_user.can_view_stock or current_user.role == 'admin' %}
-                <a href="{{ url_for('inventory.stock_summary') }}" class="nav-link {{ 'active' if request.path.startswith('/inventory/stock_summary') }}" onclick="closeSidebar()">
-                    <i class="bi bi-graph-up"></i> Stock Summary
-                </a>
-                {% endif %}
-
-                {% if current_user.can_view_daily or current_user.role == 'admin' %}
-                <a href="{{ url_for('inventory.daily_transactions') }}" class="nav-link {{ 'active' if request.path.startswith('/inventory/daily_transactions') }}" onclick="closeSidebar()">
-                    <i class="bi bi-list-check"></i> Daily Breakdown
-                </a>
-                {% endif %}
-
-                {% if current_user.can_view_history or current_user.role == 'admin' %}
-                <a href="/tracking" class="nav-link {{ 'active' if request.path == '/tracking' }}" onclick="closeSidebar()">
-                    <i class="bi bi-clock-history"></i> History
-                </a>
-                {% set can_tx_grn = (current_user.can_manage_grn or current_user.role == 'admin') %}
-                {% set can_tx_booking = (current_user.can_manage_bookings or current_user.role == 'admin') %}
-                {% set can_tx_sale = (current_user.can_manage_sales or current_user.role == 'admin') %}
-                {% if can_tx_grn or can_tx_booking or can_tx_sale %}
-                {% set tx_open = request.path in ['/grn', '/bookings', '/direct_sales', '/material_returns'] %}
-                <button type="button" class="nav-link nav-toggle-btn {{ 'active' if tx_open }}" onclick="toggleNavGroup('navTxGroup', this)">
-                    <span class="nav-toggle-label">
-                        <i class="bi bi-diagram-3"></i> Transactions
-                    </span>
-                    <i class="bi bi-chevron-down nav-caret {{ 'rotated' if tx_open }}"></i>
-                </button>
-                <div id="navTxGroup" class="nav-submenu {{ 'show' if tx_open }}">
-                    {% if can_tx_grn %}
-                    <a href="/grn" class="nav-link {{ 'active' if request.path == '/grn' }}" onclick="closeSidebar()">
-                        <i class="bi bi-box-arrow-in-down"></i> GRN (Receiving)
-                    </a>
-                    {% endif %}
-                    {% if can_tx_booking %}
-                    <a href="/bookings" class="nav-link {{ 'active' if request.path == '/bookings' }}" onclick="closeSidebar()">
-                        <i class="bi bi-bookmark-plus"></i> Bookings
-                    </a>
-                    {% endif %}
-                    {% if can_tx_sale %}
-                    <a href="/direct_sales" class="nav-link {{ 'active' if request.path == '/direct_sales' }}" onclick="closeSidebar()">
-                        <i class="bi bi-cart-check"></i> Sales
-                    </a>
-                    <a href="/material_returns" class="nav-link {{ 'active' if request.path == '/material_returns' }}" onclick="closeSidebar()">
-                        <i class="bi bi-arrow-counterclockwise"></i> Material Return
-                    </a>
-                    {% endif %}
+                {# --- 1. Inventory --- #}
+                {% if can_inv_stock or can_inv_daily or can_inv_history %}
+                {% set act_stock = req_path.startswith('/inventory/stock_summary') or req_path == '/stock_summary' %}
+                {% set act_daily = req_path.startswith('/inventory/daily_transactions') or req_path in ['/daily_transactions', '/dispatching'] %}
+                {% set act_history = req_path in ['/tracking', '/inventory/log'] or req_path.startswith('/material_ledger') %}
+                {% set inv_open = (can_inv_stock and act_stock) or (can_inv_daily and act_daily) or (can_inv_history and act_history) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if inv_open }} {{ 'has-active' if inv_open }}"
+                            aria-expanded="{{ 'true' if inv_open else 'false' }}"
+                            aria-controls="navInventoryGroup"
+                            onclick="toggleNavGroup('navInventoryGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-boxes"></i> Inventory
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if inv_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navInventoryGroup" class="nav-submenu {{ 'show' if inv_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_inv_stock %}
+                            <a href="{{ url_for('inventory.stock_summary') }}" class="nav-link {{ 'active' if act_stock }}" onclick="closeSidebar()">
+                                <i class="bi bi-graph-up"></i> Stock Summary
+                            </a>
+                            {% endif %}
+                            {% if can_inv_daily %}
+                            <a href="{{ url_for('inventory.daily_transactions') }}" class="nav-link {{ 'active' if act_daily }}" onclick="closeSidebar()">
+                                <i class="bi bi-list-check"></i> Daily Breakdown
+                            </a>
+                            {% endif %}
+                            {% if can_inv_history %}
+                            <a href="/tracking" class="nav-link {{ 'active' if act_history }}" onclick="closeSidebar()">
+                                <i class="bi bi-clock-history"></i> History
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
                 {% endif %}
-                {% if current_user.can_manage_payments or current_user.role == 'admin' %}
-                <a href="/payments" class="nav-link {{ 'active' if request.path == '/payments' }}" onclick="closeSidebar()">
-                    <i class="bi bi-cash-stack"></i> Payments
-                </a>
-                <a href="{{ url_for('accounts.dashboard') }}" class="nav-link {{ 'active' if request.path.startswith('/accounts') }}" onclick="closeSidebar()">
-                    <i class="bi bi-calculator"></i> Accounts
-                </a>
-                <a href="{{ url_for('cash_flow') }}" class="nav-link {{ 'active' if request.path.startswith('/cash_flow') }}" onclick="closeSidebar()">
-                    <i class="bi bi-water"></i> Cash Flow
-                </a>
-                <a href="{{ url_for('daily_reconciliation') }}" class="nav-link {{ 'active' if request.path.startswith('/daily_reconciliation') }}" onclick="closeSidebar()">
-                    <i class="bi bi-check2-circle"></i> Daily Reconciliation
-                </a>
-                <a href="{{ url_for('financial_tracker') }}" class="nav-link {{ 'active' if request.path.startswith('/financial_tracker') }}" onclick="closeSidebar()">
-                    <i class="bi bi-funnel"></i> Financial Tracker
-                </a>
-                {% endif %}
-                {% if current_user.can_view_delivery_rent or current_user.role == 'admin' %}
-                <a href="/delivery_rents" class="nav-link {{ 'active' if request.path == '/delivery_rents' }}" onclick="closeSidebar()">
-                    <i class="bi bi-truck"></i> Delivery Rent
-                </a>
-                <a href="/delivery_persons" class="nav-link {{ 'active' if request.path.startswith('/delivery_person') or request.path.startswith('/delivery_ledger') }}" onclick="closeSidebar()">
-                    <i class="bi bi-journal-check"></i> Delivery Person Ledger
-                </a>
-                {% endif %}
-                {% if current_user.can_view_client_ledger or current_user.role == 'admin' %}
-                <a href="/clients" class="nav-link {{ 'active' if request.path.startswith('/ledger') or request.path == '/clients' }}" onclick="closeSidebar()">
-                    <i class="bi bi-journal-text"></i> Client Ledger
-                </a>
-                {% endif %}
-                {% if current_user.can_view_supplier_ledger or current_user.role == 'admin' %}
-                <a href="/suppliers" class="nav-link {{ 'active' if request.path == '/suppliers' }}" onclick="closeSidebar()">
-                    <i class="bi bi-journal-richtext"></i> Supplier Ledger
-                </a>
-                <a href="{{ url_for('accounts.supplier_payments') }}" class="nav-link {{ 'active' if request.path.startswith('/accounts/payments/suppliers') }}" onclick="closeSidebar()">
-                    <i class="bi bi-cash-stack"></i> Pay Supplier
-                </a>
-                {% endif %}
-                {% if current_user.can_view_decision_ledger or current_user.role == 'admin' %}
-                <a href="/decision_ledger" class="nav-link {{ 'active' if request.path == '/decision_ledger' }}" onclick="closeSidebar()">
-                    <i class="bi bi-clipboard-data"></i> Decision Ledger
-                </a>
-                {% endif %}
+
+                {# --- 2. Transactions --- #}
+                {% if can_tx_grn or can_tx_booking or can_tx_sale or can_tx_pending_bills or can_tx_delivery_rent %}
+                {% set act_grn = req_path.startswith('/grn') or req_path.startswith('/receiving') %}
+                {% set act_booking = req_path.startswith('/bookings') %}
+                {% set act_sale = req_path.startswith('/direct_sales') or req_path.startswith('/view_bill') %}
+                {% set act_return = req_path.startswith('/material_returns') %}
+                {% set act_pending_bills = req_path.startswith('/pending_bills') %}
+                {% set act_delivery_rent = req_path.startswith('/delivery_rents') %}
+                {% set tx_open = (can_tx_grn and act_grn) or (can_tx_booking and act_booking) or (can_tx_sale and (act_sale or act_return)) or (can_tx_pending_bills and act_pending_bills) or (can_tx_delivery_rent and act_delivery_rent) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if tx_open }} {{ 'has-active' if tx_open }}"
+                            aria-expanded="{{ 'true' if tx_open else 'false' }}"
+                            aria-controls="navTxGroup"
+                            onclick="toggleNavGroup('navTxGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-diagram-3"></i> Transactions
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if tx_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navTxGroup" class="nav-submenu {{ 'show' if tx_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_tx_grn %}
+                            <a href="/grn" class="nav-link {{ 'active' if act_grn }}" onclick="closeSidebar()">
+                                <i class="bi bi-box-arrow-in-down"></i> GRN (Receiving)
+                            </a>
+                            {% endif %}
+                            {% if can_tx_booking %}
+                            <a href="/bookings" class="nav-link {{ 'active' if act_booking }}" onclick="closeSidebar()">
+                                <i class="bi bi-bookmark-plus"></i> Bookings
+                            </a>
+                            {% endif %}
+                            {% if can_tx_sale %}
+                            <a href="/direct_sales" class="nav-link {{ 'active' if act_sale }}" onclick="closeSidebar()">
+                                <i class="bi bi-cart-check"></i> Sales
+                            </a>
+                            <a href="/material_returns" class="nav-link {{ 'active' if act_return }}" onclick="closeSidebar()">
+                                <i class="bi bi-arrow-counterclockwise"></i> Material Return
+                            </a>
+                            {% endif %}
+                            {% if can_tx_pending_bills %}
+                            <a href="/pending_bills" class="nav-link {{ 'active' if act_pending_bills }}" onclick="closeSidebar()">
+                                <i class="bi bi-receipt"></i> Pending Bills
+                            </a>
+                            {% endif %}
+                            {% if can_tx_delivery_rent %}
+                            <a href="/delivery_rents" class="nav-link {{ 'active' if act_delivery_rent }}" onclick="closeSidebar()">
+                                <i class="bi bi-truck"></i> Delivery Rent
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
 
-                {% if current_user.can_manage_pending_bills or current_user.role == 'admin' %}
-                <a href="/pending_bills" class="nav-link {{ 'active' if request.path == '/pending_bills' }}" onclick="closeSidebar()">
-                    <i class="bi bi-receipt"></i> Pending Bills
-                </a>
+                {# --- 3. Accounts --- #}
+                {% if can_acc_payments or can_acc_accounts or can_acc_cashflow or can_acc_pay_supplier or can_acc_profit %}
+                {% set act_payments = req_path.startswith('/payments') %}
+                {% set act_pay_supplier = req_path.startswith('/accounts/payments/suppliers') or req_path.startswith('/pay_supplier') %}
+                {% set act_accounts = req_path.startswith('/accounts') and not act_pay_supplier %}
+                {% set act_cash_flow = req_path.startswith('/cash_flow') %}
+                {% set act_daily_recon = req_path.startswith('/daily_reconciliation') %}
+                {% set act_fin_tracker = req_path.startswith('/financial_tracker') %}
+                {% set act_profit = req_path.startswith('/profit_reports') or req_path.startswith('/financial_details') or req_path.startswith('/mixed_transactions') %}
+                {% set acc_open = (can_acc_payments and act_payments) or (can_acc_accounts and act_accounts) or (can_acc_cashflow and (act_cash_flow or act_daily_recon or act_fin_tracker)) or (can_acc_pay_supplier and act_pay_supplier) or (can_acc_profit and act_profit) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if acc_open }} {{ 'has-active' if acc_open }}"
+                            aria-expanded="{{ 'true' if acc_open else 'false' }}"
+                            aria-controls="navAccountsGroup"
+                            onclick="toggleNavGroup('navAccountsGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-calculator"></i> Accounts
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if acc_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navAccountsGroup" class="nav-submenu {{ 'show' if acc_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_acc_payments %}
+                            <a href="/payments" class="nav-link {{ 'active' if act_payments }}" onclick="closeSidebar()">
+                                <i class="bi bi-cash-stack"></i> Payments
+                            </a>
+                            {% endif %}
+                            {% if can_acc_accounts %}
+                            <a href="{{ url_for('accounts.dashboard') }}" class="nav-link {{ 'active' if act_accounts }}" onclick="closeSidebar()">
+                                <i class="bi bi-bank"></i> Accounts
+                            </a>
+                            {% endif %}
+                            {% if can_acc_cashflow %}
+                            <a href="{{ url_for('cash_flow') }}" class="nav-link {{ 'active' if act_cash_flow }}" onclick="closeSidebar()">
+                                <i class="bi bi-water"></i> Cash Flow
+                            </a>
+                            <a href="{{ url_for('daily_reconciliation') }}" class="nav-link {{ 'active' if act_daily_recon }}" onclick="closeSidebar()">
+                                <i class="bi bi-check2-circle"></i> Daily Reconciliation
+                            </a>
+                            <a href="{{ url_for('financial_tracker') }}" class="nav-link {{ 'active' if act_fin_tracker }}" onclick="closeSidebar()">
+                                <i class="bi bi-funnel"></i> Financial Tracker
+                            </a>
+                            {% endif %}
+                            {% if can_acc_pay_supplier %}
+                            <a href="{{ url_for('accounts.supplier_payments') }}" class="nav-link {{ 'active' if act_pay_supplier }}" onclick="closeSidebar()">
+                                <i class="bi bi-cash-coin"></i> Pay Supplier
+                            </a>
+                            {% endif %}
+                            {% if can_acc_profit %}
+                            <a href="/profit_reports" class="nav-link {{ 'active' if act_profit }}" onclick="closeSidebar()">
+                                <i class="bi bi-bar-chart-line"></i> Profit Reports
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
 
-                {% if current_user.can_view_reports or current_user.role == 'admin' %}
-                <a href="/current_payables" class="nav-link {{ 'active' if request.path in ['/unpaid_transactions', '/current_payables'] }}" onclick="closeSidebar()">
-                    <i class="bi bi-wallet2"></i> Current Payables
-                </a>
-                <a href="/profit_reports" class="nav-link {{ 'active' if request.path == '/profit_reports' }}" onclick="closeSidebar()">
-                    <i class="bi bi-bar-chart-line"></i> Profit Reports
-                </a>
-                {% endif %}
-                {% if current_user.can_manage_notifications or current_user.role == 'admin' %}
-                <a href="/notifications" class="nav-link {{ 'active' if request.path == '/notifications' }}" onclick="closeSidebar()">
-                    <i class="bi bi-bell"></i> Notifications
-                </a>
+                {# --- 4. Ledger --- #}
+                {% if can_ldg_supplier or can_ldg_client or can_ldg_driver or can_ldg_decision or can_ldg_payables or can_ldg_notifications %}
+                {% set act_supplier_ledger = req_path == '/suppliers' or req_path.startswith('/supplier_ledger') %}
+                {% set act_client_ledger = req_path == '/clients' or req_path.startswith('/ledger') or req_path.startswith('/client_ledger') or req_path.startswith('/financial_ledger') %}
+                {% set act_driver_ledger = req_path.startswith('/delivery_person_ledger') or req_path.startswith('/delivery_ledger') or (req_path == '/delivery_persons' and req_src != 'dir') %}
+                {% set act_decision_ledger = req_path.startswith('/decision_ledger') %}
+                {% set act_payables = req_path in ['/unpaid_transactions', '/current_payables'] %}
+                {% set act_notifications = req_path.startswith('/notifications') %}
+                {% set ldg_open = (can_ldg_supplier and act_supplier_ledger) or (can_ldg_client and act_client_ledger) or (can_ldg_driver and act_driver_ledger) or (can_ldg_decision and act_decision_ledger) or (can_ldg_payables and act_payables) or (can_ldg_notifications and act_notifications) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if ldg_open }} {{ 'has-active' if ldg_open }}"
+                            aria-expanded="{{ 'true' if ldg_open else 'false' }}"
+                            aria-controls="navLedgerGroup"
+                            onclick="toggleNavGroup('navLedgerGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-journals"></i> Ledger
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if ldg_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navLedgerGroup" class="nav-submenu {{ 'show' if ldg_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_ldg_supplier %}
+                            <a href="/suppliers" class="nav-link {{ 'active' if act_supplier_ledger }}" onclick="closeSidebar()">
+                                <i class="bi bi-journal-richtext"></i> Supplier Ledger
+                            </a>
+                            {% endif %}
+                            {% if can_ldg_client %}
+                            <a href="/clients" class="nav-link {{ 'active' if act_client_ledger }}" onclick="closeSidebar()">
+                                <i class="bi bi-journal-text"></i> Client Ledger
+                            </a>
+                            {% endif %}
+                            {% if can_ldg_driver %}
+                            <a href="/delivery_persons" class="nav-link {{ 'active' if act_driver_ledger }}" onclick="closeSidebar()">
+                                <i class="bi bi-journal-check"></i> Delivery Person Ledger
+                            </a>
+                            {% endif %}
+                            {% if can_ldg_decision %}
+                            <a href="/decision_ledger" class="nav-link {{ 'active' if act_decision_ledger }}" onclick="closeSidebar()">
+                                <i class="bi bi-clipboard-data"></i> Decision Ledger
+                            </a>
+                            {% endif %}
+                            {% if can_ldg_payables %}
+                            <a href="/current_payables" class="nav-link {{ 'active' if act_payables }}" onclick="closeSidebar()">
+                                <i class="bi bi-wallet2"></i> Current Payables
+                            </a>
+                            {% endif %}
+                            {% if can_ldg_notifications %}
+                            <a href="/notifications" class="nav-link {{ 'active' if act_notifications }}" onclick="closeSidebar()">
+                                <i class="bi bi-bell"></i> Notifications
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
 
-                {% if current_user.can_import_export or current_user.role == 'admin' %}
-                <a href="{{ url_for('import_export.import_export_page') }}" class="nav-link {{ 'active' if request.path.startswith('/import_export') }}" onclick="closeSidebar()">
-                    <i class="bi bi-arrow-left-right"></i> Import & Export
-                </a>
-                <a href="{{ url_for('legacy_migration.dashboard') }}" class="nav-link {{ 'active' if request.path.startswith('/legacy-migration') }}" onclick="closeSidebar()">
-                    <i class="bi bi-database-gear"></i> Legacy Data Migration
-                </a>
+                {# --- 5. Directory --- #}
+                {% if can_dir_materials or can_dir_drivers %}
+                {% set act_materials = req_path.startswith('/materials') %}
+                {% set act_services = req_path.startswith('/services') %}
+                {% set act_dir_drivers = req_path == '/delivery_persons' and req_src == 'dir' %}
+                {% set dir_open = (can_dir_materials and (act_materials or act_services)) or (can_dir_drivers and act_dir_drivers) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if dir_open }} {{ 'has-active' if dir_open }}"
+                            aria-expanded="{{ 'true' if dir_open else 'false' }}"
+                            aria-controls="navDirectoryGroup"
+                            onclick="toggleNavGroup('navDirectoryGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-folder2-open"></i> Directory
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if dir_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navDirectoryGroup" class="nav-submenu {{ 'show' if dir_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_dir_materials %}
+                            <a href="/materials" class="nav-link {{ 'active' if act_materials }}" onclick="closeSidebar()">
+                                <i class="bi bi-tags"></i> Material Brands
+                            </a>
+                            <a href="/services" class="nav-link {{ 'active' if act_services }}" onclick="closeSidebar()">
+                                <i class="bi bi-receipt-cutoff"></i> Services &amp; Charges
+                            </a>
+                            {% endif %}
+                            {% if can_dir_drivers %}
+                            <a href="/delivery_persons?src=dir" class="nav-link {{ 'active' if act_dir_drivers }}" onclick="closeSidebar()">
+                                <i class="bi bi-person-badge"></i> Delivery Persons
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
 
-                {% if current_user.can_manage_materials or current_user.can_manage_delivery_persons or current_user.role == 'admin' %}
-                <div class="text-white-50 small fw-bold px-4 mt-4 mb-2 text-uppercase" style="font-size: 0.7rem;">Directory</div>
-                {% if current_user.can_manage_materials or current_user.role == 'admin' %}
-                <a href="/materials" class="nav-link {{ 'active' if request.path == '/materials' }}" onclick="closeSidebar()">
-                    <i class="bi bi-tags"></i> Material Brands
-                </a>
-                <a href="/services" class="nav-link {{ 'active' if request.path == '/services' }}" onclick="closeSidebar()">
-                    <i class="bi bi-receipt-cutoff"></i> Services &amp; Charges
-                </a>
+                {# --- 6. System --- #}
+                {% if can_sys_ie or can_sys_settings %}
+                {% set act_import_export = req_path.startswith('/import_export') or req_path.startswith('/data_lab') or req_path.startswith('/full_raw_import') %}
+                {% set act_legacy_mig = req_path.startswith('/legacy-migration') %}
+                {% set act_settings = req_path.startswith('/settings') or req_path.startswith('/activity_log') or req_path.startswith('/void_audit') or req_path.startswith('/system_report') %}
+                {% set sys_open = (can_sys_ie and (act_import_export or act_legacy_mig)) or (can_sys_settings and act_settings) %}
+                <div class="nav-group">
+                    <button type="button"
+                            class="nav-link nav-toggle-btn {{ 'is-open' if sys_open }} {{ 'has-active' if sys_open }}"
+                            aria-expanded="{{ 'true' if sys_open else 'false' }}"
+                            aria-controls="navSystemGroup"
+                            onclick="toggleNavGroup('navSystemGroup', this)">
+                        <span class="nav-toggle-label">
+                            <i class="bi bi-gear-wide-connected"></i> System
+                        </span>
+                        <span class="nav-toggle-meta">
+                            <span class="nav-active-dot"></span>
+                            <i class="bi bi-chevron-down nav-caret {{ 'rotated' if sys_open }}"></i>
+                        </span>
+                    </button>
+                    <div id="navSystemGroup" class="nav-submenu {{ 'show' if sys_open }}">
+                        <div class="nav-submenu-inner">
+                            {% if can_sys_ie %}
+                            <a href="{{ url_for('import_export.import_export_page') }}" class="nav-link {{ 'active' if act_import_export }}" onclick="closeSidebar()">
+                                <i class="bi bi-arrow-left-right"></i> Import &amp; Export
+                            </a>
+                            <a href="{{ url_for('legacy_migration.dashboard') }}" class="nav-link {{ 'active' if act_legacy_mig }}" onclick="closeSidebar()">
+                                <i class="bi bi-database-gear"></i> Legacy Data Migration
+                            </a>
+                            {% endif %}
+                            {% if can_sys_settings %}
+                            <a href="/settings" class="nav-link {{ 'active' if act_settings }}" onclick="closeSidebar()">
+                                <i class="bi bi-gear"></i> Settings
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
-                {% if current_user.can_manage_delivery_persons or current_user.role == 'admin' %}
-                <a href="/delivery_persons" class="nav-link {{ 'active' if request.path == '/delivery_persons' }}" onclick="closeSidebar()">
-                    <i class="bi bi-person-badge"></i> Delivery Persons
-                </a>
-                {% endif %}
-                {% endif %}
-                {% endif %}
-
-                <div class="text-white-50 small fw-bold px-4 mt-4 mb-2 text-uppercase" style="font-size: 0.7rem;">System</div>
-                {% if current_user.role != 'root' and (current_user.role == 'admin' or current_user.can_access_settings) %}
-<a href="/settings" class="nav-link {{ 'active' if request.path == '/settings' }}" onclick="closeSidebar()">
-                    <i class="bi bi-gear"></i> Settings
-                </a>
                 {% endif %}
             </nav>
         </div>
@@ -712,22 +1027,64 @@ function closeSidebar() {
         document.body.style.overflow = '';
 }
 
+function setNavGroupOpen(box, btn, open) {
+    if (!box) return;
+    box.classList.toggle('show', !!open);
+    if (btn) {
+        btn.classList.toggle('is-open', !!open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        const caret = btn.querySelector('.nav-caret');
+        if (caret) caret.classList.toggle('rotated', !!open);
+    }
+}
+
 function toggleNavGroup(groupId, btn) {
     const box = document.getElementById(groupId);
     if (!box) return;
-    box.classList.toggle('show');
-    const caret = btn ? btn.querySelector('.nav-caret') : null;
-    if (caret) caret.classList.toggle('rotated');
+    const willOpen = !box.classList.contains('show');
+
+    // Smart accordion: when opening a category, collapse any other open category
+    // so the sidebar stays compact and uncluttered.
+    if (willOpen && sidebarNav) {
+        sidebarNav.querySelectorAll('.nav-submenu.show').forEach(function (otherBox) {
+            if (otherBox.id === groupId) return;
+            const otherBtn = sidebarNav.querySelector('[aria-controls="' + otherBox.id + '"]');
+            setNavGroupOpen(otherBox, otherBtn, false);
+        });
+    }
+
+    setNavGroupOpen(box, btn, willOpen);
+
+    // Ensure newly expanded items near the bottom are brought into view smoothly.
+    if (willOpen && sidebarNav) {
+        setTimeout(function () {
+            const groupEl = box.closest('.nav-group') || box;
+            const navRect = sidebarNav.getBoundingClientRect();
+            const grpRect = groupEl.getBoundingClientRect();
+            if (grpRect.bottom > navRect.bottom) {
+                groupEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }, 230);
+    }
 }
 
     if (toggle) toggle.addEventListener('click', openSidebar);
     if (overlay) overlay.addEventListener('click', closeSidebar);
 
-    // Keep sidebar scroll position across page navigation.
+    // Keep sidebar scroll position across page navigation, while ensuring the
+    // currently active link is always visible inside the viewport.
     if (sidebarNav) {
         const savedScroll = parseInt(localStorage.getItem('sidebar_scroll_top') || '0', 10);
         if (!Number.isNaN(savedScroll) && savedScroll > 0) {
             sidebarNav.scrollTop = savedScroll;
+        }
+        const activeLink = sidebarNav.querySelector('.nav-link.active');
+        if (activeLink) {
+            const navRect = sidebarNav.getBoundingClientRect();
+            const linkRect = activeLink.getBoundingClientRect();
+            if (linkRect.top < navRect.top || linkRect.bottom > navRect.bottom) {
+                activeLink.scrollIntoView({ block: 'nearest' });
+            }
         }
         sidebarNav.addEventListener('scroll', function() {
             localStorage.setItem('sidebar_scroll_top', String(sidebarNav.scrollTop || 0));
