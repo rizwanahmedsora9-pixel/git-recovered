@@ -1,74 +1,59 @@
 {% extends "layout.html" %}
 {% block content %}
 <style>
-    .ledger-material-badge {
-        padding: 12px 14px;
-        min-width: 150px;
-        border-radius: 10px;
-    }
-    .ledger-material-title {
-        font-size: 0.9rem;
-        letter-spacing: 0.02em;
-    }
-    .ledger-material-line {
-        font-size: 0.78rem;
-    }
+    .ledger-panel { background: #1e293b; border: 1px solid #475569; border-radius: 14px; overflow: hidden; }
+    .ledger-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .ledger-stat { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 16px; }
+    .ledger-stat-label { color: #aab8ca; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    .ledger-stat-value { color: #fff; font-size: clamp(1.05rem, 2vw, 1.5rem); font-weight: 700; overflow-wrap: anywhere; }
+    .ledger-table { min-width: 670px; }
+    .ledger-table th { white-space: nowrap; font-size: .8rem; }
+    .ledger-table td { vertical-align: middle; }
+    .ledger-material-badge { padding: 12px; width: 230px; max-width: 100%; border-radius: 10px; white-space: normal; font-weight: 400; }
+    .ledger-material-title { font-size: .9rem; overflow-wrap: anywhere; }
+    .ledger-material-line { display: flex; justify-content: space-between; gap: 12px; font-size: .78rem; margin-top: 6px; }
+    .ledger-material-line span:last-child { text-align: right; }
     @media (max-width: 575.98px) {
-        .ledger-material-badge {
-            min-width: 100%;
-        }
+        .ledger-summary-grid { grid-template-columns: 1fr; }
+        .ledger-material-badge { width: 100%; min-width: 210px; }
     }
 </style>
+{% macro qty(value) %}{{ "{:,.2f}".format(value or 0).rstrip('0').rstrip('.') }}{% endmacro %}
+{% macro money(value) %}{{ currency_symbol }}{{ "{:,.2f}".format(value or 0) }}{% endmacro %}
 <div class="mb-4">
     <h2 class="fw-bold text-warning"><i class="bi bi-clipboard-data me-2"></i>Decision Ledger</h2>
     <p class="text-white-50">Consolidated view of all client financials and material status.</p>
 </div>
 
 <!-- Overall Material Summary -->
-<div class="card border-0 shadow-sm mb-4" style="background: #1e293b; border: 2px solid #475569 !important; border-radius: 15px;">
-    <div class="card-header bg-transparent border-secondary py-3">
-        <h5 class="fw-bold text-white mb-0">Overall Material Summary</h5>
+<div class="ledger-panel shadow-sm mb-4">
+    <div class="card-header bg-transparent border-bottom border-secondary p-3 p-md-4">
+        <h5 class="fw-bold text-white mb-1">Overall Material Summary</h5>
+        <p class="text-white-50 small mb-0">All active clients · unaffected by filters or pagination</p>
+    </div>
+    <div class="p-3 p-md-4">
+        <div class="ledger-summary-grid">
+            <div class="ledger-stat"><div class="ledger-stat-label">Booked value</div><div class="ledger-stat-value text-info">{{ money(overall_totals.booked_cost) }}</div></div>
+            <div class="ledger-stat"><div class="ledger-stat-label">Delivered value</div><div class="ledger-stat-value text-success">{{ money(overall_totals.dispatched_cost) }}</div></div>
+            <div class="ledger-stat"><div class="ledger-stat-label">Remaining value</div><div class="ledger-stat-value text-warning">{{ money(overall_totals.remaining_cost) }}</div></div>
+        </div>
+        <p class="text-white-50 small mt-3 mb-0">Gross booking prices before discounts. Deliveries use allocated booking rates; older unallocated deliveries are estimated using the oldest available booking rates. Remaining value = booked − delivered.</p>
+        {% if overall_totals.unpriced_qty > 0 %}<p class="text-warning small mt-2 mb-0">{{ qty(overall_totals.unpriced_qty) }} delivered units have no matching booking quantity and are not priced.</p>{% endif %}
     </div>
     <div class="table-responsive">
-        <table class="table table-dark table-hover align-middle mb-0 text-center">
-            <thead style="background: #0f172a;">
-                <tr>
-                    <th class="text-start ps-4 text-white-50">Metric</th>
-                    {% for item in overall_material_summary %}
-                    <th class="text-warning">{{ item.name }}</th>
-                    {% endfor %}
-                </tr>
-            </thead>
+        <table class="table table-dark table-hover align-middle mb-0 ledger-table">
+            <thead><tr><th class="ps-4">Material</th><th class="text-end">Booked qty</th><th class="text-end">Booked value</th><th class="text-end">Delivered qty</th><th class="text-end">Delivered value</th><th class="text-end">Remaining qty</th><th class="text-end pe-4">Remaining value</th></tr></thead>
             <tbody>
-                <tr>
-                    <td class="text-start ps-4 fw-bold text-white">Total Booked</td>
-                    {% for item in overall_material_summary %}
-                    <td class="text-info">{{ item.booked|int }}</td>
-                    {% endfor %}
-                </tr>
-                <tr>
-                    <td class="text-start ps-4 fw-bold text-white">Total Dispatched</td>
-                    {% for item in overall_material_summary %}
-                    <td class="text-success">{{ item.dispatched|int }}</td>
-                    {% endfor %}
-                </tr>
-                <tr>
-                    <td class="text-start ps-4 fw-bold text-white">Total Remaining</td>
-                    {% for item in overall_material_summary %}
-                    <td class="text-danger">{{ item.remaining|int }}</td>
-                    {% endfor %}
-                </tr>
-                <tr>
-                    <td class="text-start ps-4 fw-bold text-white">Overall Remaining (All)</td>
-                    <td class="text-warning fw-bold" colspan="{{ overall_material_summary|length }}">{{ overall_remaining_total|int }}</td>
-                </tr>
+                {% for item in overall_material_summary %}
+                <tr><td class="ps-4 fw-bold text-warning">{{ item.name }}</td><td class="text-end">{{ qty(item.booked) }}</td><td class="text-end">{{ money(item.booked_cost) }}</td><td class="text-end">{{ qty(item.dispatched) }}</td><td class="text-end text-success">{{ money(item.dispatched_cost) }}</td><td class="text-end">{{ qty(item.remaining) }}</td><td class="text-end pe-4 text-warning">{{ money(item.remaining_cost) }}</td></tr>
+                {% else %}<tr><td colspan="7" class="text-center text-white-50 py-4">No material activity found.</td></tr>{% endfor %}
             </tbody>
         </table>
     </div>
 </div>
 
 <!-- Client Ledger Table -->
-<div class="card border-0 shadow-sm" style="background: #1e293b; border: 2px solid #475569 !important; border-radius: 15px;">
+<div class="card ledger-panel shadow-sm">
     <div class="card-header bg-transparent border-secondary py-3">
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <h5 class="fw-bold text-white mb-0">Client Financials & Material Status</h5>
@@ -122,7 +107,7 @@
                     <th class="ps-4 py-3 text-white-50">Client</th>
                     <th class="py-3 text-white-50">Category</th>
                     <th class="py-3 text-end text-white-50">Pending</th>
-                    <th class="py-3 text-white-50">Material Status (Booked / Disp / Rem)</th>
+                    <th class="py-3 text-white-50">Material status & gross value</th>
                     <th class="py-3 text-end pe-4 text-white-50">Action</th>
                 </tr>
             </thead>
@@ -143,29 +128,17 @@
                             {% for mat in row.materials %}
                             <div class="badge bg-dark border border-secondary text-start ledger-material-badge">
                                 <div class="text-warning mb-2 fw-bold ledger-material-title">{{ mat.name }}</div>
-                                <div class="d-flex gap-2 ledger-material-line">
-                                    <span class="text-white-50" title="Booked">B:{{ mat.booked|int }}</span>
-                                    <span class="text-success" title="Dispatched">D:{{ mat.dispatched|int }}</span>
-                                    <span class="text-danger" title="Remaining">R:{{ mat.remaining|int }}</span>
-                                </div>
-                                <div class="d-flex gap-2 ledger-material-line mt-2">
-                                    <span class="text-white-50" title="Unit Rate">Rate: {{ currency_symbol }}{{ "{:,.2f}".format(mat.unit_price or 0) }}</span>
-                                </div>
-                                <div class="d-flex gap-2 ledger-material-line">
-                                    <span class="text-info" title="Booked Cost">B Cost: {{ currency_symbol }}{{ "{:,.0f}".format(mat.booked_cost or 0) }}</span>
-                                </div>
-                                <div class="d-flex gap-2 ledger-material-line">
-                                    <span class="text-success" title="Dispatched Cost">D Cost: {{ currency_symbol }}{{ "{:,.0f}".format(mat.dispatched_cost or 0) }}</span>
-                                </div>
-                                <div class="d-flex gap-2 ledger-material-line">
-                                    <span class="text-danger" title="Remaining Cost">R Cost: {{ currency_symbol }}{{ "{:,.0f}".format(mat.remaining_cost or 0) }}</span>
-                                </div>
+                                <div class="ledger-material-line"><span class="text-white-50">Booked · {{ qty(mat.booked) }}</span><span class="text-info">{{ money(mat.booked_cost) }}</span></div>
+                                <div class="ledger-material-line"><span class="text-white-50">Delivered · {{ qty(mat.dispatched) }}</span><span class="text-success">{{ money(mat.dispatched_cost) }}</span></div>
+                                <div class="ledger-material-line"><span class="text-white-50">Remaining · {{ qty(mat.remaining) }}</span><span class="text-warning">{{ money(mat.remaining_cost) }}</span></div>
+                                {% if mat.unpriced_qty > 0 %}<div class="text-warning small mt-2">{{ qty(mat.unpriced_qty) }} delivered units unpriced</div>{% endif %}
                             </div>
                             {% endfor %}
                         </div>
                         <div class="small text-white-50 mt-2">
-                            Total Remaining: <span class="text-danger fw-bold">{{ row.material_totals.total_remaining_qty|int }}</span>
-                            <span class="ms-2">Reserved Cost: <span class="text-warning fw-bold">{{ currency_symbol }}{{ "{:,.0f}".format(row.material_totals.total_reserved_cost or 0) }}</span></span>
+                            Total value — Booked: <span class="text-info">{{ money(row.material_totals.total_booked_cost) }}</span> ·
+                            Delivered: <span class="text-success">{{ money(row.material_totals.total_dispatched_cost) }}</span> ·
+                            Remaining: <span class="text-warning">{{ money(row.material_totals.total_reserved_cost) }}</span>
                         </div>
                         {% else %}
                         <span class="text-white-50 small">-</span>
@@ -177,6 +150,8 @@
                         </a>
                     </td>
                 </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-white-50 py-4">No clients match these filters.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
