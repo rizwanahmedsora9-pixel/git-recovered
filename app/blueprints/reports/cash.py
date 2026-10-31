@@ -767,13 +767,14 @@ def cash_flow():
         import csv
         writer = csv.writer(buf)
         writer.writerow([
-            'Date', 'Type', 'Account', 'Category', 'Subcategory', 'Party',
+            'Date', 'Type', 'Account', 'Section', 'Category', 'Subcategory', 'Party',
             'Amount', 'Received', 'Spent', 'Transfer', 'Description', 'Notes',
             'Reference', 'Source', 'Created By', 'Status',
         ])
         for r in display_rows:
             writer.writerow([
                 r.get('date'), r.get('tx_type_label'), r.get('account_display'),
+                r.get('section_label'),
                 r.get('category'), r.get('subcategory'), r.get('party_name'),
                 r.get('amount'), r.get('cash_in') or '', r.get('cash_out') or '',
                 r.get('transfer_amount') or '', r.get('description'), r.get('note'),
@@ -1014,10 +1015,20 @@ def _dr_build_context(day_value, embed=False):
     positions = recon.account_positions_for_date(day_str)
     day_lock = recon.get_day_lock(day_str)
     total_expected = _money_round(sum(p['expected_closing'] for p in positions))
-    counted_values = [p['effective_counted'] for p in positions if p['effective_counted'] is not None]
+    counted_positions = [p for p in positions if p['effective_counted'] is not None]
+    counted_values = [p['effective_counted'] for p in counted_positions]
     total_counted = _money_round(sum(counted_values)) if counted_values else None
+    # The difference may only compare like with like: counted balances against
+    # the expected closing of the *same* accounts.  Comparing a single counted
+    # account against the expected total of every account produced a huge
+    # meaningless negative number, which made the whole difference mechanism
+    # look broken.
+    expected_counted = _money_round(
+        sum(p['expected_closing'] for p in counted_positions)
+    ) if counted_positions else None
     net_difference = (
-        _money_round(total_counted - total_expected) if total_counted is not None else 0.0
+        _money_round(total_counted - expected_counted)
+        if total_counted is not None else None
     )
     prev_str = (datetime.strptime(day_str, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
     next_str = (datetime.strptime(day_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -1030,7 +1041,10 @@ def _dr_build_context(day_value, embed=False):
         day_lock=day_lock,
         total_expected=total_expected,
         total_counted=total_counted,
+        expected_counted=expected_counted,
         net_difference=net_difference,
+        counted_accounts=len(counted_positions),
+        accounts_total=len(positions),
         embed=embed,
     )
 
@@ -1056,7 +1070,10 @@ def _dr_json_context(day_str):
         'day_str': ctx['day_str'],
         'total_expected': ctx['total_expected'],
         'total_counted': ctx['total_counted'],
+        'expected_counted': ctx['expected_counted'],
         'net_difference': ctx['net_difference'],
+        'counted_accounts': ctx['counted_accounts'],
+        'accounts_total': ctx['accounts_total'],
         'positions': ctx['positions'],
     }
 
@@ -1087,12 +1104,10 @@ def daily_reconciliation():
         status = 'success'
         try:
             if action == 'save_count':
-                if counted_raw == '':
-                    raise ValueError('empty counted amount')
                 recon.save_count(
                     day_str,
-                    int(request.form.get('account_id')),
-                    float(counted_raw),
+                    request.form.get('account_id'),
+                    counted_raw,
                     actor=current_user,
                 )
                 message = 'Counted balance saved.'
@@ -1106,15 +1121,20 @@ def daily_reconciliation():
                 message = f'Day {day_str} unlocked.'
                 status = 'warning'
             elif action == 'clear_count':
-                recon.delete_count(day_str, int(request.form.get('account_id')))
+                recon.delete_count(day_str, request.form.get('account_id'))
                 message = 'Counted balance cleared.'
                 status = 'warning'
             else:
-                raise ValueError('Unsupported reconciliation action.')
-        except (TypeError, ValueError):
+                raise ValueError('Unsupported reconciliation action. Reload the page and try again.')
+        except (TypeError, ValueError) as exc:
             db.session.rollback()
             ok = False
-            message = 'Enter a valid counted amount.' if action == 'save_count' else 'Unable to update reconciliation.'
+            # Surface the real reason ("Counted amount is required", "Day is
+            # locked", ...) instead of a generic message the user cannot act on.
+            message = str(exc) or (
+                'Enter a valid counted amount.' if action == 'save_count'
+                else 'Unable to update reconciliation.'
+            )
             status = 'danger'
         except Exception:
             db.session.rollback()
@@ -1275,13 +1295,17 @@ def financial_tracker():
         buf = io.StringIO()
         import csv
         w = csv.writer(buf)
-        w.writerow(['Date', 'Type', 'Account', 'Category', 'Party', 'In', 'Out', 'Transfer', 'Reference', 'Description'])
+        w.writerow([
+            'Date', 'Type', 'Account', 'Section', 'Category', 'Party', 'In', 'Out',
+            'Transfer', 'Reference', 'Description', 'User',
+        ])
         for r in filtered:
             w.writerow([
                 r.get('date'), r.get('tx_type_label'), r.get('account_display'),
+                r.get('section_label'),
                 r.get('category'), r.get('party_name'), r.get('cash_in') or '',
                 r.get('cash_out') or '', r.get('transfer_amount') or '',
-                r.get('reference'), r.get('description'),
+                r.get('reference'), r.get('description'), r.get('created_by'),
             ])
         resp = make_response(buf.getvalue())
         resp.headers['Content-Type'] = 'text/csv; charset=utf-8'

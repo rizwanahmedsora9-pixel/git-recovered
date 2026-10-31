@@ -5,26 +5,36 @@ layout (references-images/): for a financial day each company money account
 shows OPENING / IN / OUT / TRANSFER IN / TRANSFER OUT / EXPECTED CLOSING plus
 the user's ACTUAL COUNTED figure and the DIFFERENCE.
 
+Opening balances are ledger-derived: an unlocked day starts from the same
+figure ``ledger_balance()`` reports in Accounts (explicit opening baseline, or
+the inferred baseline for accounts created before opening metadata existed),
+plus every active movement up to the end of the previous day.
+
 Locking a day freezes the per-account counted figures; the locked counted
 closing for an account becomes that account's opening on the next day, which
 is exactly the "locked amount shows as next day opening balances" behaviour.
+
+Counted amounts are typed by hand, so parsing lives here (``parse_counted_amount``)
+and accepts "160,000"/"Rs. 160000.50"; locked days refuse count changes until
+they are unlocked.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+import math
+import re
+from datetime import date, datetime, time, timedelta
+
+from sqlalchemy import case, func, or_
 
 from models import (
-    db, Account, CashDayLock, CashDayAccountPosition,
+    db, Account, AccountTransaction, CashDayLock, CashDayAccountPosition,
 )
-from utils.money import from_minor
+from utils.money import from_minor, to_minor
 from app.services.time_money import _money_round, pk_now, pk_today
 from app.services.cash_flow_svc import (
     CF_DIR_IN, CF_DIR_OUT, CF_DIR_TRANSFER,
     collect_cash_flow_rows, _cf_company_accounts, _cf_account_label,
 )
-
-_EPOCH = "0001-01-01"
-
 
 def _to_date(value) -> date:
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -34,16 +44,112 @@ def _to_date(value) -> date:
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
 
 
-def _account_baseline(account, as_of: date) -> float:
-    """Opening balance of an account if its opening date is on/before as_of."""
+def _opening_effective_day(account):
     ob_date = getattr(account, "opening_balance_date", None)
-    if ob_date is not None:
-        ob_day = ob_date.date() if hasattr(ob_date, "date") else ob_date
-        if ob_day > as_of:
-            return 0.0
+    if ob_date is None:
+        return None
+    return ob_date.date() if hasattr(ob_date, "date") else ob_date
+
+
+def _movement_minor(account_id, *, after=None, through=None):
+    """(incoming, outgoing) minor units for one account — voided rows excluded."""
+    amount_expr = func.coalesce(
+        AccountTransaction.amount_minor,
+        func.round(AccountTransaction.amount * 100.0),
+    )
+    incoming_expr = func.coalesce(func.sum(case(
+        (AccountTransaction.to_account_id == account_id, amount_expr), else_=0
+    )), 0)
+    outgoing_expr = func.coalesce(func.sum(case(
+        (AccountTransaction.from_account_id == account_id, amount_expr), else_=0
+    )), 0)
+    q = db.session.query(incoming_expr, outgoing_expr).filter(
+        AccountTransaction.is_void == False,  # noqa: E712
+        or_(
+            AccountTransaction.from_account_id == account_id,
+            AccountTransaction.to_account_id == account_id,
+        ),
+    )
+    if after is not None:
+        q = q.filter(AccountTransaction.date_posted > after)
+    if through is not None:
+        q = q.filter(AccountTransaction.date_posted <= through)
+    incoming, outgoing = q.one()
+    return int(round(float(incoming or 0))), int(round(float(outgoing or 0)))
+
+
+def _account_baseline_minor(account) -> int:
+    """Explicit opening baseline, or the inferred one for legacy accounts.
+
+    Mirrors ``payments_crud.ledger_balance`` so the Daily Reconciliation board
+    and the Accounts module always show the same starting figure.  Accounts
+    created before opening-balance metadata existed store no baseline at all;
+    for those the opening is inferred from the cached balance minus every
+    ledger movement, instead of silently falling back to zero.
+    """
     if getattr(account, "opening_balance_minor", None) is not None:
-        return float(from_minor(account.opening_balance_minor))
-    return float(account.opening_balance or 0)
+        return int(account.opening_balance_minor)
+    if getattr(account, "opening_balance", None) is not None:
+        return int(to_minor(account.opening_balance))
+    incoming_all, outgoing_all = _movement_minor(account.id)
+    return int(to_minor(account.balance or 0)) - incoming_all + outgoing_all
+
+
+def ledger_opening_minor(account, through=None) -> int:
+    """Opening baseline plus every active movement through ``through``."""
+    opening = _account_baseline_minor(account)
+    incoming, outgoing = _movement_minor(account.id, through=through)
+    return opening + incoming - outgoing
+
+
+def _account_opening(account, day: date, lock=None) -> float:
+    """Opening balance for *account* at the start of *day*.
+
+    * A previously locked day is authoritative: the locked counted closing is
+      carried forward plus every movement posted after that day.
+    * Otherwise the opening is the ledger balance at the end of the previous
+      day, computed exactly like ``ledger_balance()`` so the board ties out
+      with Accounts.
+    * An account whose opening balance is effective in the future has not
+      started yet on this day, so its opening is zero.
+    """
+    if lock is not None:
+        base = int(to_minor(lock.counted or 0))
+        lock_end = datetime.combine(lock.position_date, time.max)
+        prev_end = datetime.combine(day - timedelta(days=1), time.max)
+        incoming, outgoing = _movement_minor(
+            account.id, after=lock_end, through=prev_end
+        )
+        return float(from_minor(base + incoming - outgoing))
+
+    ob_day = _opening_effective_day(account)
+    if ob_day is not None and ob_day > day:
+        return 0.0
+    return float(from_minor(ledger_opening_minor(
+        account, through=datetime.combine(day - timedelta(days=1), time.max)
+    )))
+
+
+def parse_counted_amount(value, *, field="Counted amount"):
+    """Parse a user-typed physical count ("160,000", "Rs. 160000.50", "160 000").
+
+    The board used ``type=number`` inputs, which silently discard thousands
+    separators and then block the submit, so a count typed the way people
+    write money never reached the server.  Parsing is explicit here instead.
+    """
+    raw = str(value if value is not None else "").strip()
+    cleaned = re.sub(r"(?i)rs\.?|pkr|,|\s|_", "", raw)
+    if cleaned in ("", "-", "--", "—"):
+        raise ValueError(f"{field} is required.")
+    try:
+        amount = float(cleaned)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number (for example 160000 or 160,000).")
+    if not math.isfinite(amount):
+        raise ValueError(f"{field} must be a finite number.")
+    if amount < 0:
+        raise ValueError(f"{field} cannot be negative.")
+    return _money_round(amount)
 
 
 def _activity_between(from_date: str, to_date: str) -> dict:
@@ -76,7 +182,6 @@ def account_positions_for_date(day) -> list:
     """Return the per-account position dicts for a financial day."""
     day = _to_date(day)
     day_str = day.strftime("%Y-%m-%d")
-    prev_str = (day - timedelta(days=1)).strftime("%Y-%m-%d")
     accounts = _cf_company_accounts(active_only=True)
 
     saved = {
@@ -92,27 +197,14 @@ def account_positions_for_date(day) -> list:
     for p in prior_locked:
         locks[p.account_id] = p
 
-    # Group accounts by the window that feeds their opening so we only call
-    # collect_cash_flow_rows once per distinct window.
-    windows = {}
-    for acc in accounts:
-        lk = locks.get(acc.id)
-        if lk is not None:
-            start = (lk.position_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            start = _EPOCH
-        windows.setdefault((start, prev_str), []).append(acc)
-
-    opening_by_acc = {}
-    for (start, end), accs in windows.items():
-        act = _activity_between(start, end)
-        for acc in accs:
-            lk = locks.get(acc.id)
-            base = float(lk.counted or 0) if lk is not None else _account_baseline(acc, day)
-            a = act.get(acc.id, {"in": 0.0, "out": 0.0, "tin": 0.0, "tout": 0.0})
-            opening_by_acc[acc.id] = _money_round(
-                base + a["in"] - a["out"] + a["tin"] - a["tout"]
-            )
+    # Opening = locked carry-forward, else the ledger balance at the end of the
+    # previous day (the same rule ledger_balance() uses on every Accounts
+    # screen).  Computing it from the ledger in minor units keeps the board
+    # exact instead of drifting a few paisa on float accumulation.
+    opening_by_acc = {
+        acc.id: _money_round(_account_opening(acc, day, locks.get(acc.id)))
+        for acc in accounts
+    }
 
     day_act = _activity_between(day_str, day_str)
 
@@ -163,21 +255,38 @@ def get_day_lock(day):
 
 
 def save_count(day, account_id, counted, actor=None):
-    """Store the user-entered physical count for one account on a day."""
+    """Store the user-entered physical count for one account on a day.
+
+    ``counted`` accepts anything a person types ("160,000", "Rs 160000.50",
+    "160 000") — parsing lives here so the browser never has to be the
+    validator.  Locked days are immutable until they are unlocked.
+    """
     day = _to_date(day)
-    actor_name = getattr(actor, "username", None) or actor
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        raise ValueError("Select an account to count.")
+    amount = parse_counted_amount(counted)
+    day_lock = get_day_lock(day)
     pos = CashDayAccountPosition.query.filter_by(
         position_date=day, account_id=account_id
     ).first()
+    if day_lock is not None or (pos is not None and pos.is_locked):
+        raise ValueError(
+            f"{day:%Y-%m-%d} is locked. Unlock the day before changing counts."
+        )
+    acc = db.session.get(Account, account_id)
+    if acc is None:
+        raise ValueError("Account not found.")
+    actor_name = getattr(actor, "username", None) or actor
     if pos is None:
-        acc = Account.query.get(account_id)
         pos = CashDayAccountPosition(
             position_date=day,
             account_id=account_id,
             account_name=(acc.name if acc else ""),
         )
         db.session.add(pos)
-    pos.counted = float(counted)
+    pos.counted = amount
     pos.difference = None  # recomputed on read
     pos.updated_by = actor_name
     db.session.commit()
@@ -253,9 +362,18 @@ def unlock_day(day):
 
 def delete_count(day, account_id):
     day = _to_date(day)
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        raise ValueError("Select an account to clear.")
+    day_lock = get_day_lock(day)
     pos = CashDayAccountPosition.query.filter_by(
         position_date=day, account_id=account_id
     ).first()
+    if day_lock is not None or (pos is not None and pos.is_locked):
+        raise ValueError(
+            f"{day:%Y-%m-%d} is locked. Unlock the day before clearing counts."
+        )
     if pos:
         db.session.delete(pos)
         db.session.commit()
