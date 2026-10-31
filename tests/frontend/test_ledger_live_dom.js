@@ -52,8 +52,13 @@ w.FBMGrnConsumption = {
         return Promise.resolve({ items: {} });
     }
 };
+let lastProfitRefreshOptions;
 w.FBMProfitFilters = {
-    refresh: function () { profitRefreshCalls += 1; return Promise.resolve(true); }
+    refresh: function (overrides, options) {
+        profitRefreshCalls += 1;
+        lastProfitRefreshOptions = options;
+        return Promise.resolve(true);
+    }
 };
 
 w.eval(code);
@@ -72,6 +77,11 @@ check("init returns a controller", !!api && typeof api.check === "function");
     await wait();
     check("GRN projection refreshed after ledger change", grnRefreshCalls === 1, grnRefreshCalls);
     check("Profit report refreshed after ledger change", profitRefreshCalls === 1, profitRefreshCalls);
+    check("auto-refresh keeps the reader's scroll position (in place, background)",
+        !!lastProfitRefreshOptions
+            && lastProfitRefreshOptions.keepScroll === true
+            && lastProfitRefreshOptions.background === true,
+        JSON.stringify(lastProfitRefreshOptions));
     check("new revision saved", api.revision() === "revision-two", api.revision());
     check("status reports updated", /updated/.test(w.document.getElementById("live").textContent),
         w.document.getElementById("live").textContent);
@@ -80,6 +90,26 @@ check("init returns a controller", !!api && typeof api.check === "function");
     await wait();
     check("same revision does not repaint again", grnRefreshCalls === 1 && profitRefreshCalls === 1);
     check("revision endpoint was polled", revisionCalls >= 3, revisionCalls);
+
+    // A reader who has text selected (e.g. copying a figure at the bottom
+    // of the report) must not have the page swapped from under them.
+    w.document.getSelection = function () {
+        return { isCollapsed: false, toString: function () { return "2,400.00"; } };
+    };
+    revision = "revision-three";
+    await api.check(false);
+    await wait();
+    check("live refresh held back while the reader has text selected",
+        profitRefreshCalls === 1 && api.revision() === "revision-two",
+        profitRefreshCalls + "/" + api.revision());
+    check("status says the update is pending", /pending/.test(w.document.getElementById("live").textContent),
+        w.document.getElementById("live").textContent);
+    delete w.document.getSelection;
+    await api.check(false);
+    await wait();
+    check("pending live refresh applies once the selection is cleared",
+        profitRefreshCalls === 2 && api.revision() === "revision-three",
+        profitRefreshCalls + "/" + api.revision());
 
     console.log(fail === 0 ? "\nALL " + pass + " CHECKS PASSED" : "\n" + fail + " FAILED / " + pass + " passed");
     process.exit(fail === 0 ? 0 : 1);

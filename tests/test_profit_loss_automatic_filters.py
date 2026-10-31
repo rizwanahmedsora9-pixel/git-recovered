@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -410,3 +411,35 @@ def test_11_estimated_block_is_visually_separate_from_realized_profit(scenario):
     # The single headline figure is the realized net, never a blend with the estimate.
     assert "Net Profit / Loss for the selected period" in html
     assert html.index("Net Profit / Loss for the selected period") < html.index("Realized profit")
+
+
+def test_12_auto_refresh_updates_in_place_without_pulling_reader_to_top(scenario):
+    """Regression guard: the live refresh must be a JS partial swap that
+    restores the reader's scroll position — never a full reload and never
+    a scroll back to the top of the results.  Behaviour is covered by
+    tests/frontend/test_profit_report_dom.js; this locks the wiring."""
+    client = make_csrf_client(scenario)
+    login(client)
+    html = client.get("/profit_reports?period=custom&start_date=2026-03-01&end_date=2026-03-31").get_data(as_text=True)
+    assert "profit_report.js?v=3" in html
+    assert "ledger_live.js?v=2" in html
+    # Native scroll anchoring is off for the region so it cannot fight the
+    # JavaScript scroll restoration and cause a jump.
+    assert "overflow-anchor:none" in html
+
+    root = Path(__file__).resolve().parents[1]
+    profit_js = (root / "static" / "profit_report.js").read_text(encoding="utf-8")
+    live_js = (root / "static" / "ledger_live.js").read_text(encoding="utf-8")
+
+    # No full-page reload anywhere in the P&L refresh path (back/forward
+    # included), and the old "scroll to the top of the results" is gone.
+    assert "location.reload" not in profit_js
+    assert "location.reload" not in live_js
+    assert "region.getBoundingClientRect().top + window.pageYOffset - 12" not in profit_js
+    # The swap captures and restores the reading position in place.
+    assert "captureViewState" in profit_js
+    assert "restoreViewState" in profit_js
+    assert "partial" in profit_js
+    # The live watcher asks for exactly that: in place, scroll kept,
+    # no dimming flash under the reader.
+    assert "FBMProfitFilters.refresh(null, { keepScroll: true, background: true })" in live_js

@@ -6,6 +6,12 @@
    booking delivery or void is committed by this or another yard PC, it asks
    the authoritative endpoints for a fresh projection.  It never computes a
    quantity, rate or profit in the browser.
+
+   The refresh is applied in place by JavaScript (partial re-render) and
+   must never move the reader: the P&L refresh is asked to keep the scroll
+   position exactly where it is, and a refresh is held back entirely while
+   the reader is typing a filter or has text selected (e.g. copying a
+   figure), then applied on a later poll.
    ========================================================================= */
 (function () {
     "use strict";
@@ -40,6 +46,19 @@
         return !!(el.matches && el.matches("input, select, textarea, [contenteditable='true']"));
     }
 
+    function userHasSelection() {
+        // Someone reading at the bottom with a figure selected (to copy it)
+        // must not have the DOM swapped from under them mid-selection.
+        try {
+            var selection = document.getSelection
+                ? document.getSelection()
+                : (window.getSelection ? window.getSelection() : null);
+            return !!(selection && !selection.isCollapsed && String(selection).length);
+        } catch (error) {
+            return false;
+        }
+    }
+
     function refreshGrn() {
         if (!state.config.grn || !window.FBMGrnConsumption || !window.FBMGrnConsumption.refresh) {
             return Promise.resolve(true);
@@ -55,9 +74,13 @@
             return Promise.resolve(true);
         }
         // The existing controller rebuilds the URL from the current filters,
-        // fetches ?partial=1 and replaces only the results region.  Await its
-        // result so "Live · updated" is never shown for a failed request.
-        return Promise.resolve(window.FBMProfitFilters.refresh()).then(function (ok) {
+        // fetches ?partial=1 and replaces only the results region — in
+        // place, keeping the reader's scroll position and without dimming
+        // the report (background).  Await its result so "Live · updated"
+        // is never shown for a failed request.
+        return Promise.resolve(
+            window.FBMProfitFilters.refresh(null, { keepScroll: true, background: true })
+        ).then(function (ok) {
             return ok !== false;
         });
     }
@@ -96,8 +119,9 @@
                 setStatus("Live · synced " + clock());
             } else if (payload.revision !== state.revision || force) {
                 // Never replace the results under a user who is typing a
-                // filter.  Keep the old revision so the next poll retries.
-                if (userIsEditing()) {
+                // filter or holding a text selection.  Keep the old
+                // revision so the next poll retries.
+                if (userIsEditing() || userHasSelection()) {
                     setStatus("Live · update pending");
                 } else {
                     applyRevision(payload.revision);

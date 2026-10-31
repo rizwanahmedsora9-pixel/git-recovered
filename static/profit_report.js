@@ -7,8 +7,16 @@
      Free-text fields are debounced; selects and dates apply at once.
    * Only the results region is re-rendered (`?partial=1`), so the filters keep
      their focus, scroll position and selected values.
-   * While a request is in flight the results are dimmed and a progress bar is
-     shown, so stale figures are never presented as current.
+   * A refresh NEVER moves the reader.  The window scroll position, the
+     scroll offsets of the inner tables, open <details> sections and focus
+     inside the results are captured just before the swap and restored in
+     the same frame, so the live auto-refresh (ledger_live.js) can update
+     the figures underneath someone who is reading at the bottom of the
+     page without pulling them back to the top.  The only exception is an
+     explicit pagination click, which moves to the top of its own table.
+   * While a filter request is in flight the results are dimmed and a
+     progress bar is shown, so stale figures are never presented as
+     current.  Background live refreshes skip the dimming entirely.
    * All arithmetic stays on the server.  This script never computes a total.
 
    Loaded only by the P&L page; no dependency on any other module.
@@ -212,9 +220,12 @@
         var timer = null;
         var lastUrl = window.location.href;
 
-        function setBusy(busy) {
+        function setBusy(busy, options) {
             var surface = region.querySelector("[data-pl-results]") || region;
-            surface.classList.toggle("is-loading", busy);
+            // A background (live) refresh must not flash/dim the report under
+            // a reader: only the thin progress bar and the status label move.
+            var background = !!(options && options.background);
+            surface.classList.toggle("is-loading", busy && !background);
             if (loadingBar) loadingBar.classList.toggle("is-on", busy);
             if (stateLabel) {
                 stateLabel.classList.toggle("is-busy", busy);
@@ -297,11 +308,164 @@
             region.insertBefore(box, region.firstChild);
         }
 
+        /* --- in-place refresh: never move the reader ------------------------
+           Replacing the results region must be invisible to someone reading
+           it.  Capture the reading position immediately before the swap
+           (not when the request starts — the reader may keep scrolling
+           while it is in flight) and restore it in the same frame:
+           window scroll (adjusted by an anchor element so height changes
+           above the reading line do not shift the text), inner table
+           scroll offsets, open <details> sections and focus. */
+        var SCROLLER_SELECTOR = ".pl-scroll, .pl-chart, .ui-table-wrap";
+
+        function domPath(el) {
+            if (!el || !region.contains(el)) return null;
+            var path = [];
+            var node = el;
+            while (node && node !== region) {
+                var parent = node.parentElement;
+                if (!parent) return null;
+                path.unshift(Array.prototype.indexOf.call(parent.children, node));
+                node = parent;
+            }
+            return path;
+        }
+
+        function fromDomPath(path) {
+            if (!path) return null;
+            var node = region;
+            for (var i = 0; i < path.length; i += 1) {
+                node = node.children ? node.children[path[i]] : null;
+                if (!node) return null;
+            }
+            return node === region ? null : node;
+        }
+
+        function findAnchor() {
+            var el = null;
+            try {
+                if (document.elementFromPoint) {
+                    var rect = region.getBoundingClientRect();
+                    var x = Math.max(1, Math.min((window.innerWidth || 2) - 2, rect.left + 24));
+                    el = document.elementFromPoint(x, 40);
+                    if (!el || !region.contains(el)) {
+                        el = document.elementFromPoint(x, Math.floor((window.innerHeight || 90) / 3));
+                    }
+                    if (el && !region.contains(el)) el = null;
+                }
+            } catch (error) {
+                el = null;
+            }
+            if (!el) {
+                var blocks = region.querySelectorAll(".ui-card, .profit-hero, .pl-section-head, tr");
+                for (var i = 0; i < blocks.length; i += 1) {
+                    var blockRect = blocks[i].getBoundingClientRect();
+                    if (blockRect.bottom > 0 && blockRect.top < (window.innerHeight || 0)) {
+                        el = blocks[i];
+                        break;
+                    }
+                }
+            }
+            var path = el ? domPath(el) : null;
+            if (!path) return null;
+            return { path: path, top: el.getBoundingClientRect().top };
+        }
+
+        function captureViewState() {
+            var scrollers = [];
+            var scrollEls = region.querySelectorAll(SCROLLER_SELECTOR);
+            Array.prototype.forEach.call(scrollEls, function (el, index) {
+                if (el.scrollTop || el.scrollLeft) {
+                    scrollers.push({ index: index, top: el.scrollTop, left: el.scrollLeft });
+                }
+            });
+            var details = [];
+            Array.prototype.forEach.call(region.querySelectorAll("details"), function (el) {
+                details.push(!!el.open);
+            });
+            var active = document.activeElement;
+            var focus = null;
+            if (active && active !== document.body && region.contains(active)) {
+                focus = {
+                    path: domPath(active),
+                    start: typeof active.selectionStart === "number" ? active.selectionStart : null,
+                    end: typeof active.selectionEnd === "number" ? active.selectionEnd : null
+                };
+                if (!focus.path) focus = null;
+            }
+            return {
+                x: window.pageXOffset || 0,
+                y: window.pageYOffset || 0,
+                anchor: findAnchor(),
+                scrollers: scrollers,
+                details: details,
+                focus: focus
+            };
+        }
+
+        function scrollWindowTo(x, y) {
+            if (typeof window.scrollTo === "function") {
+                window.scrollTo({ left: x, top: y, behavior: "auto" });
+            }
+        }
+
+        // ``navElement`` is set only for an explicit pagination click: the
+        // reader asked for another page of that table, so land on the top
+        // of the table's card — never on the top of the whole report.
+        function restoreViewState(state, navElement) {
+            if (!state) return;
+            Array.prototype.forEach.call(region.querySelectorAll("details"), function (el, index) {
+                if (index < state.details.length) el.open = state.details[index];
+            });
+            var scrollEls = region.querySelectorAll(SCROLLER_SELECTOR);
+            state.scrollers.forEach(function (entry) {
+                var el = scrollEls[entry.index];
+                if (!el) return;
+                el.scrollTop = entry.top;
+                el.scrollLeft = entry.left;
+            });
+
+            var targetY;
+            if (navElement) {
+                targetY = navElement.getBoundingClientRect().top + (window.pageYOffset || 0) - 12;
+                scrollWindowTo(state.x, Math.max(0, targetY));
+                return;
+            }
+
+            targetY = state.y;
+            if (state.anchor) {
+                var anchorEl = fromDomPath(state.anchor.path);
+                if (anchorEl) {
+                    // Keep the anchored element at the same viewport offset
+                    // even if content above it grew or shrank in the refresh.
+                    targetY = (window.pageYOffset || 0)
+                        + (anchorEl.getBoundingClientRect().top - state.anchor.top);
+                }
+            }
+            scrollWindowTo(state.x, Math.max(0, targetY));
+
+            if (state.focus) {
+                var focusEl = fromDomPath(state.focus.path);
+                if (focusEl && typeof focusEl.focus === "function") {
+                    try {
+                        focusEl.focus({ preventScroll: true });
+                    } catch (error) {
+                        focusEl.focus();
+                    }
+                    if (state.focus.start !== null && typeof focusEl.setSelectionRange === "function") {
+                        try { focusEl.setSelectionRange(state.focus.start, state.focus.end); } catch (error) { /* not a text field */ }
+                    }
+                    // Belt and braces for browsers that scroll on focus anyway.
+                    scrollWindowTo(state.x, Math.max(0, targetY));
+                }
+            }
+        }
+
         function load(url, options) {
             options = options || {};
             if (controller) controller.abort();
             controller = window.AbortController ? new AbortController() : null;
-            setBusy(true);
+            setBusy(true, options);
             clearError();
             var target = splitPartial(url);
             return fetch(target.fetchUrl, {
@@ -312,14 +476,15 @@
                 if (!response.ok) throw new Error("The report could not be generated (HTTP " + response.status + ").");
                 return response.text();
             }).then(function (html) {
+                // In-place swap only: capture the reading position right
+                // now, replace the figures, put the reader back exactly
+                // where they were.  No full reload, no jump to the top.
+                var view = captureViewState();
                 region.innerHTML = html;
                 syncDateInputs();
                 var cleanUrl = target.cleanUrl;
-                if (!options.keepScroll) {
-                    // Keep the reader anchored to the results they were reading.
-                    var top = region.getBoundingClientRect().top + window.pageYOffset - 12;
-                    if (window.pageYOffset > top) window.scrollTo({ top: top, behavior: "auto" });
-                }
+                var navElement = options.scrollToPath ? fromDomPath(options.scrollToPath) : null;
+                restoreViewState(view, navElement);
                 lastUrl = cleanUrl;
                 window.history.replaceState({}, "", cleanUrl);
                 setBusy(false);
@@ -333,12 +498,14 @@
             });
         }
 
-        function refresh(overrides) {
+        function refresh(overrides, options) {
             window.clearTimeout(timer);
-            return load(buildUrl(overrides));
+            return load(buildUrl(overrides), options);
         }
         // The live-ledger watcher calls this after another user posts a sale or
-        // GRN.  It uses exactly the same partial request as a filter change.
+        // GRN.  It uses exactly the same partial request as a filter change
+        // (with {background: true}); both replace only the results region
+        // and restore the reading position, so neither pulls the reader up.
         activeRefresh = refresh;
 
         function refreshDebounced(overrides) {
@@ -452,11 +619,26 @@
                 return;
             }
             ev.preventDefault();
-            load(href);
+            var options = {};
+            // Sorting keeps the reader exactly where they are (the default).
+            // Paging is an explicit request for the next slice of a table, so
+            // land on that table's card — never on the top of the report.
+            if (link.closest(".pagination")) {
+                var card = link.closest(".ui-card");
+                var cardPath = card ? domPath(card) : null;
+                if (cardPath) options.scrollToPath = cardPath;
+            }
+            load(href, options);
         });
 
         window.addEventListener("popstate", function () {
-            window.location.reload();
+            // Never a full reload (which throws the reader back to the top):
+            // refresh the results region in place and keep the scroll put.
+            // Hash-only changes (e.g. #pl-undelivered-estimate) need no fetch.
+            var last = absolute(lastUrl);
+            var lastKey = last ? last.pathname + last.search : "";
+            if ((window.location.pathname + window.location.search) === lastKey) return;
+            load(window.location.href, { keepScroll: true, background: true });
         });
 
         setBusy(false);
@@ -465,8 +647,11 @@
 
     window.FBMProfitFilters = {
         init: init,
-        refresh: function (overrides) {
-            return activeRefresh ? activeRefresh(overrides) : Promise.resolve(true);
+        // ``options`` is forwarded to load(): the live watcher passes
+        // {keepScroll: true, background: true} for its automatic refresh.
+        // Keeping scroll is the default for every refresh regardless.
+        refresh: function (overrides, options) {
+            return activeRefresh ? activeRefresh(overrides, options) : Promise.resolve(true);
         }
     };
 })();
