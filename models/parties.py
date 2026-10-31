@@ -1,6 +1,14 @@
 from .__base import *  # noqa
 from .helpers import *  # noqa
 
+class ClientCategory(db.Model):
+    """User-managed classification for client ledger records."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False, unique=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=pk_model_now, index=True)
+
+
 class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(50), nullable=False)

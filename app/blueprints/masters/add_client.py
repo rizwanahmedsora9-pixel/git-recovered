@@ -13,7 +13,18 @@ def add_client():
     if Client.query.filter_by(code=code).first():
         flash(f'Client code "{code}" already exists', 'danger')
         return redirect(url_for('clients'))
-    category = request.form.get('category', 'General').strip() or 'General'
+    category = (request.form.get('category') or '').strip()
+    if not category:
+        flash('Please select a client category', 'danger')
+        return redirect(url_for('clients'))
+    category_obj = ClientCategory.query.filter(
+        func.lower(func.trim(ClientCategory.name)) == category.lower(),
+        ClientCategory.is_active == True,
+    ).first()
+    if not category_obj:
+        flash('Select a valid category from the client ledger categories', 'danger')
+        return redirect(url_for('clients'))
+    category = category_obj.name
     opening_balance = _to_float_or_zero(request.form.get('opening_balance', 0))
     opening_balance_date = _resolve_opening_balance_date(request.form.get('opening_balance_date'))
     page_entries_raw = request.form.getlist('page_entry')

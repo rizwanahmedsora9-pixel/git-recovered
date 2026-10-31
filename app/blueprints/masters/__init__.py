@@ -1,5 +1,6 @@
 from ._common import *  # noqa
 from .clients import *  # noqa
+from .client_categories import *  # noqa
 from .add_client import *  # noqa
 from .edit_client import *  # noqa
 from .client_opening_balance import *  # noqa

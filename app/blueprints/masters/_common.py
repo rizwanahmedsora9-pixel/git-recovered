@@ -23,3 +23,34 @@ from app.services.constants import (
 from models import MaterialCategory
 
 bp = Blueprint("masters", __name__)
+
+
+def ensure_client_category_options():
+    """Backfill category masters from existing client records and return choices.
+
+    Client.category remains a string for compatibility with transaction/import
+    code, while this master list makes categories selectable and manageable in
+    the client ledger UI.
+    """
+    names_by_key = {"general": "General"}
+    for (value,) in db.session.query(Client.category).all():
+        name = str(value).strip() if value else ""
+        if name:
+            names_by_key.setdefault(name.casefold(), name)
+    names = list(names_by_key.values())
+    existing = {
+        str(row.name).strip().casefold(): row
+        for row in ClientCategory.query.filter_by(is_active=True).all()
+        if row.name and str(row.name).strip()
+    }
+    changed = False
+    for name in sorted(names, key=str.casefold):
+        if name.casefold() not in existing:
+            db.session.add(ClientCategory(name=name))
+            changed = True
+    if changed:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    return ClientCategory.query.filter_by(is_active=True).order_by(ClientCategory.name.asc()).all()

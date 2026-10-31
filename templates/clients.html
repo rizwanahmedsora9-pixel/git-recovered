@@ -36,6 +36,7 @@
                 <i class="bi bi-play-circle me-1"></i> Activate All Suspended
             </button>
         </form>
+        <button class="btn btn-outline-info btn-sm fw-bold" data-bs-toggle="modal" data-bs-target="#clientCategoryModal">+ Category</button>
         <button class="btn btn-warning btn-sm text-dark fw-bold" data-bs-toggle="modal" data-bs-target="#cModal">+ New Client</button>
     </div>
 </div>
@@ -340,6 +341,26 @@ function addPageInput(containerId, value = '') {
 
 <div id="lazyClientModalHost"></div>
 
+<div class="modal fade" id="clientCategoryModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <form action="{{ url_for('add_client_category') }}" method="POST" class="modal-content border-secondary" style="background:#1e293b;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <div class="modal-header border-0">
+                <h5 class="text-info fw-bold mb-0">Add Client Ledger Category</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="text-white-50 small fw-bold mb-1">CATEGORY NAME</label>
+                <input type="text" name="name" maxlength="50" class="form-control bg-dark text-white border-secondary" placeholder="e.g. Retail, Contractor" required>
+                <small class="text-white-50">Categories group client records. They are separate from sale types.</small>
+            </div>
+            <div class="modal-footer border-0">
+                <button type="submit" class="btn btn-info text-dark fw-bold w-100">Add Category</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <div class="modal fade" id="cModal" tabindex="-1">
     <div class="modal-dialog">
         <form action="/add_client" method="POST" class="modal-content border-secondary" style="background: #1e293b;">
@@ -353,8 +374,11 @@ function addPageInput(containerId, value = '') {
                     <input type="text" name="name" class="form-control bg-dark text-white border-secondary" required>
                 </div>
                 <div class="mb-3">
-                    <label class="text-white-50 small fw-bold mb-1">CATEGORY</label>
-                    <input type="text" name="category" value="General" list="categoryList" class="form-control bg-dark text-white border-secondary" placeholder="Type or select category">
+                    <label class="text-white-50 small fw-bold mb-1">CATEGORY <span class="text-danger">*</span></label>
+                    <select name="category" class="form-select bg-dark text-white border-secondary" required>
+                        <option value="">-- Select client category --</option>
+                        {% for cat in categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
+                    </select>
                 </div>
                 <div class="mb-3">
                     <label class="text-white-50 small fw-bold mb-1">CODE <span class="text-danger">*</span></label>
@@ -405,15 +429,6 @@ function addPageInput(containerId, value = '') {
         </form>
     </div>
 </div>
-<datalist id="categoryList">
-    <option value="General"></option>
-    <option value="Open Khata"></option>
-    <option value="Walking-Customer"></option>
-    <option value="Misc"></option>
-    {% for cat in categories %}
-    <option value="{{ cat }}"></option>
-    {% endfor %}
-</datalist>
 <script>
 function loadClientModal(url, mode) {
     const isTransfer = mode === 'transfer';

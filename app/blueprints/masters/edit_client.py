@@ -15,6 +15,15 @@ def edit_client(id):
         old_name = c.name
         new_code = request.form.get('code', '').strip()
         new_name = request.form.get('name', '').strip()
+        category_input = (request.form.get('category') or '').strip()
+        category_obj = ClientCategory.query.filter(
+            func.lower(func.trim(ClientCategory.name)) == category_input.lower(),
+            ClientCategory.is_active == True,
+        ).first() if category_input else None
+
+        if not category_obj:
+            flash('Please select a valid client category', 'danger')
+            return redirect(url_for('clients'))
 
         if not new_code:
             flash('Client code is required', 'danger')
@@ -66,7 +75,7 @@ def edit_client(id):
         c.code = new_code
         c.phone = request.form.get('phone', '')
         c.address = request.form.get('address', '')
-        c.category = (request.form.get('category', 'General').strip() or 'General')
+        c.category = category_obj.name
         c.book_no = ''
         c.financial_book_no = ''
         c.financial_page = ''
