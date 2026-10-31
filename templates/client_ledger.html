@@ -5,6 +5,7 @@
     <div>
         <h2 class="mb-1 text-warning">Client Ledger: {{ client.name }}</h2>
         <span class="badge bg-dark border border-secondary text-info">Client Code: {{ client.code or 'N/A' }}</span>
+        <span class="badge bg-dark border border-secondary text-warning">Category: {{ client.category or 'General' }}</span>
         <div class="small mt-2 {{ 'text-danger' if (client.opening_balance or 0) > 0 else ('text-success' if (client.opening_balance or 0) < 0 else 'text-white-50') }}">
             Opening Balance: {{ "{:,.2f}".format(client.opening_balance or 0) }}
             {% set _obd = client.opening_balance_date or client.created_at %}
@@ -40,6 +41,9 @@
             <i class="bi bi-file-earmark-pdf me-1"></i> Download Full History PDF
         </a>
         <a href="{{ url_for('download_client_ledger', id=client.id) }}?action=print" target="_blank" class="btn btn-outline-primary d-print-none btn-sm"><i class="bi bi-printer"></i> Print</a>
+        {% if current_user.role in ('admin', 'root') or current_user.can_manage_clients %}
+        <a href="{{ url_for('manage_client_categories') }}" class="btn btn-outline-light btn-sm d-print-none fw-bold"><i class="bi bi-tags me-1"></i> Manage Categories</a>
+        {% endif %}
         <a href="{{ url_for('clients') }}" class="btn btn-outline-secondary btn-sm d-print-none">Back</a>
     </div>
 </div>

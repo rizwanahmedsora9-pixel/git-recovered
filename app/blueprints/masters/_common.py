@@ -54,3 +54,37 @@ def ensure_client_category_options():
         except Exception:
             db.session.rollback()
     return ClientCategory.query.filter_by(is_active=True).order_by(ClientCategory.name.asc()).all()
+
+
+def resolve_client_category(raw_name, create=True):
+    """Return the canonical client category name for a submitted value.
+
+    Categories are user-managed (``/client-ledger/categories``), but client
+    records, legacy imports and API callers still submit free-text category
+    names.  A name that is not yet in the master is registered on the fly
+    (``create=True``) so those callers keep working and the category becomes
+    selectable/renamable in the UI afterwards.  Returns ``None`` for an empty
+    or over-long value.
+    """
+    name = str(raw_name or '').strip()
+    if not name or len(name) > 50:
+        return None
+    row = ClientCategory.query.filter(
+        func.lower(func.trim(ClientCategory.name)) == name.casefold()
+    ).first()
+    if row:
+        if not row.is_active:
+            row.is_active = True
+        return row.name
+    if not create:
+        return None
+    db.session.add(ClientCategory(name=name, is_active=True))
+    try:
+        db.session.flush()
+    except Exception:
+        db.session.rollback()
+        row = ClientCategory.query.filter(
+            func.lower(func.trim(ClientCategory.name)) == name.casefold()
+        ).first()
+        return row.name if row else None
+    return name

@@ -167,6 +167,7 @@ def test_admin_sidebar_categories_and_item_grouping(client):
     assert by_label["Ledger"] == [
         "Supplier Ledger",
         "Client Ledger",
+        "Client Categories",
         "Delivery Person Ledger",
         "Decision Ledger",
         "Current Payables",
