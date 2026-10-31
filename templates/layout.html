@@ -808,6 +808,11 @@
                                 <i class="bi bi-journal-text"></i> Client Ledger
                             </a>
                             {% endif %}
+                            {% if can_ldg_client and (current_user.role in ('admin', 'root') or current_user.can_manage_clients) %}
+                            <a href="/client-ledger/categories" class="nav-link {{ 'active' if req_path.startswith('/client-ledger/categories') }}" onclick="closeSidebar()">
+                                <i class="bi bi-tags"></i> Client Categories
+                            </a>
+                            {% endif %}
                             {% if can_ldg_driver %}
                             <a href="/delivery_persons" class="nav-link {{ 'active' if act_driver_ledger }}" onclick="closeSidebar()">
                                 <i class="bi bi-journal-check"></i> Delivery Person Ledger

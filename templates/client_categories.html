@@ -1,0 +1,111 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+    <div>
+        <h2 class="fw-bold text-warning mb-0"><i class="bi bi-tags me-2"></i>Client Ledger Categories</h2>
+        <div class="text-white-50 small mt-1">Create your own categories, rename them, and switch them on/off. These categories group clients in the ledger and its filters.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('clients') }}" class="btn btn-outline-light btn-sm fw-bold"><i class="bi bi-arrow-left me-1"></i> Client Ledger</a>
+    </div>
+</div>
+
+{% if can_manage %}
+<div class="card border-0 shadow-sm mb-4" style="background:#1e293b; border:2px solid #475569 !important; border-radius:15px;">
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('add_client_category') }}" class="row g-2 align-items-end">
+            <div class="col-md-8">
+                <label class="text-white-50 small fw-bold mb-1">NEW CATEGORY NAME</label>
+                <input type="text" name="name" maxlength="50" class="form-control bg-dark text-white border-secondary" placeholder="e.g. Retail, Contractor, Government" required>
+            </div>
+            <div class="col-md-4 d-grid">
+                <button class="btn btn-warning text-dark fw-bold"><i class="bi bi-plus-lg me-1"></i>Add Category</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<div class="card border-0 shadow-sm" style="background:#1e293b; border:2px solid #475569 !important; border-radius:15px; overflow:hidden;">
+    <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+            <thead style="background:#0f172a;">
+                <tr>
+                    <th class="py-3 ps-4 text-white-50">Category</th>
+                    <th class="py-3 text-white-50">Clients</th>
+                    <th class="py-3 text-white-50">Status</th>
+                    <th class="py-3 text-white-50">Created</th>
+                    {% if can_manage %}<th class="py-3 pe-4 text-end text-white-50">Actions</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for cat in categories %}
+                <tr>
+                    <td class="ps-4 fw-bold text-white">
+                        {{ cat.name }}
+                        {% if cat.name|lower == default_category|lower %}<span class="badge bg-secondary ms-1">default</span>{% endif %}
+                    </td>
+                    <td class="text-white-50">{{ cat.client_count }}</td>
+                    <td>
+                        {% if cat.is_active %}
+                        <span class="badge bg-success-subtle text-success-emphasis border border-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-white-50 small">{{ cat.created_at.strftime('%Y-%m-%d') if cat.created_at else '-' }}</td>
+                    {% if can_manage %}
+                    <td class="pe-4 text-end">
+                        <div class="d-inline-flex gap-1 flex-wrap justify-content-end">
+                            <a class="btn btn-outline-info btn-sm" href="{{ url_for('clients', category=cat.name) }}">View</a>
+                            <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#renameCategory{{ cat.id }}">Rename</button>
+                            <form method="POST" action="{{ url_for('toggle_client_category', category_id=cat.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-outline-{{ 'secondary' if cat.is_active else 'success' }} btn-sm">
+                                    {{ 'Deactivate' if cat.is_active else 'Activate' }}
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ url_for('delete_client_category', category_id=cat.id) }}" class="d-inline"
+                                  onsubmit="return confirm('Delete category &quot;{{ cat.name }}&quot;? Only empty categories can be deleted.');">
+                                <button type="submit" class="btn btn-outline-danger btn-sm" {% if cat.client_count %}disabled title="Used by {{ cat.client_count }} client(s)"{% endif %}>Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-white-50 py-4">No categories yet — add one above.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<p class="text-white-50 small mt-3 mb-0">
+    Categories are stored separately from sale types. A category can only be deleted when no client uses it; to retire a category that is still in use, rename it or move its clients first.
+</p>
+
+{% if can_manage %}
+{% for cat in categories %}
+<div class="modal fade" id="renameCategory{{ cat.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <form method="POST" action="{{ url_for('rename_client_category', category_id=cat.id) }}" class="modal-content border-secondary" style="background:#1e293b;">
+            <div class="modal-header border-0">
+                <h5 class="text-info fw-bold mb-0">Rename Category</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="text-white-50 small fw-bold mb-1">CATEGORY NAME</label>
+                <input type="text" name="name" maxlength="50" value="{{ cat.name }}" class="form-control bg-dark text-white border-secondary" required>
+                {% if cat.client_count %}
+                <small class="text-white-50 d-block mt-2">Renaming updates all {{ cat.client_count }} client record(s) using this category.</small>
+                {% endif %}
+            </div>
+            <div class="modal-footer border-0">
+                <button type="submit" class="btn btn-info text-dark fw-bold w-100">Save Name</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

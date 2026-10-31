@@ -19,6 +19,7 @@
                         <option value="{{ cat.name }}" {% if (c.category or '').strip().lower() == cat.name.strip().lower() %}selected{% endif %}>{{ cat.name }}</option>
                         {% endfor %}
                     </select>
+                    <a href="{{ url_for('manage_client_categories') }}" target="_blank" class="small text-info text-decoration-none d-inline-block mt-1"><i class="bi bi-plus-circle me-1"></i>Add / manage categories</a>
                 </div>
                 <div class="mb-3">
                     <label class="text-white-50 small fw-bold mb-1">CODE <span class="text-danger">*</span></label>
