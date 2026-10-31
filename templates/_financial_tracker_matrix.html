@@ -21,6 +21,9 @@
   .ft-kpi .val { font-size:20px; font-weight:700; margin-top:4px; }
   .ft-table th { font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#334155; background:#eef2f7; padding:8px 10px; }
   .ft-table td { font-size:13px; padding:8px 10px; border-bottom:1px solid #e6ecf4; }
+  .ft-section-chip { display:inline-block; padding:2px 8px; border-radius:999px; background:#e8eefb; color:#334155; border:1px solid #d5e0f3; font-size:11px; font-weight:600; white-space:nowrap; }
+  .ft-user-chip { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; background:#eef7f0; color:#166534; border:1px solid #d6e9dc; font-size:11.5px; font-weight:600; white-space:nowrap; }
+  .ft-user-chip i { font-size:11px; opacity:.8; }
   .in-pos{color:#16a34a;} .out-neg{color:#dc2626;}
 </style>
 
@@ -190,9 +193,12 @@
       <table class="table ft-table align-middle mb-0">
         <thead>
           <tr>
-            <th>Date &amp; Time</th><th>Type</th><th>Account</th><th>Category</th><th>Party</th>
+            <th>Date &amp; Time</th><th>Type</th><th>Account</th>
+            <th title="Section of the app this entry was made in">Section</th>
+            <th>Category</th><th>Party</th>
             <th class="text-end">In</th><th class="text-end">Out</th><th class="text-end">Transfer</th>
             <th>Reference</th><th>Description</th>
+            <th title="User who made this entry">User</th>
             {% if ft.embed %}<th class="text-end">Actions</th>{% endif %}
           </tr>
         </thead>
@@ -202,6 +208,7 @@
             <td class="ft-mono small">{{ r.sort_dt.strftime('%Y-%m-%d %H:%M') if r.sort_dt else r.date }}</td>
             <td><span class="badge {% if r.type=='in' %}bg-success{% elif r.type=='out' %}bg-danger{% else %}bg-primary{% endif %}">{{ r.tx_type_label }}</span></td>
             <td>{{ r.account_display }}</td>
+            <td><span class="ft-section-chip">{{ r.section_label or '—' }}</span></td>
             <td>{{ r.category or '—' }}</td>
             <td>{{ r.party_name or '—' }}</td>
             <td class="text-end ft-mono in-pos">{% if r.cash_in %}+ Rs. {{ "{:,.0f}".format(r.cash_in) }}{% else %}—{% endif %}</td>
@@ -209,6 +216,13 @@
             <td class="text-end ft-mono text-primary">{% if r.transfer_amount %}Rs. {{ "{:,.0f}".format(r.transfer_amount) }}{% else %}—{% endif %}</td>
             <td class="ft-mono small">{{ r.reference or '—' }}</td>
             <td class="small">{{ r.description or '' }}</td>
+            <td class="small">
+              {% if r.created_by %}
+              <span class="ft-user-chip" title="Entered by {{ r.created_by }}"><i class="bi bi-person-circle me-1"></i>{{ r.created_by }}</span>
+              {% else %}
+              <span class="text-muted" title="No user recorded for this entry">—</span>
+              {% endif %}
+            </td>
             {% if ft.embed %}
             <td class="text-end text-nowrap">
               {% if r.entry_id %}
@@ -218,7 +232,7 @@
             {% endif %}
           </tr>
           {% else %}
-          <tr><td colspan="{% if ft.embed %}11{% else %}10{% endif %}" class="text-center text-muted py-4">No transactions match the current filters.</td></tr>
+          <tr><td colspan="{% if ft.embed %}13{% else %}12{% endif %}" class="text-center text-muted py-4">No transactions match the current filters.</td></tr>
           {% endfor %}
         </tbody>
       </table>

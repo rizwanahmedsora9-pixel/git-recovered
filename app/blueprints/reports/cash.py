@@ -767,13 +767,14 @@ def cash_flow():
         import csv
         writer = csv.writer(buf)
         writer.writerow([
-            'Date', 'Type', 'Account', 'Category', 'Subcategory', 'Party',
+            'Date', 'Type', 'Account', 'Section', 'Category', 'Subcategory', 'Party',
             'Amount', 'Received', 'Spent', 'Transfer', 'Description', 'Notes',
             'Reference', 'Source', 'Created By', 'Status',
         ])
         for r in display_rows:
             writer.writerow([
                 r.get('date'), r.get('tx_type_label'), r.get('account_display'),
+                r.get('section_label'),
                 r.get('category'), r.get('subcategory'), r.get('party_name'),
                 r.get('amount'), r.get('cash_in') or '', r.get('cash_out') or '',
                 r.get('transfer_amount') or '', r.get('description'), r.get('note'),
@@ -1275,13 +1276,17 @@ def financial_tracker():
         buf = io.StringIO()
         import csv
         w = csv.writer(buf)
-        w.writerow(['Date', 'Type', 'Account', 'Category', 'Party', 'In', 'Out', 'Transfer', 'Reference', 'Description'])
+        w.writerow([
+            'Date', 'Type', 'Account', 'Section', 'Category', 'Party', 'In', 'Out',
+            'Transfer', 'Reference', 'Description', 'User',
+        ])
         for r in filtered:
             w.writerow([
                 r.get('date'), r.get('tx_type_label'), r.get('account_display'),
+                r.get('section_label'),
                 r.get('category'), r.get('party_name'), r.get('cash_in') or '',
                 r.get('cash_out') or '', r.get('transfer_amount') or '',
-                r.get('reference'), r.get('description'),
+                r.get('reference'), r.get('description'), r.get('created_by'),
             ])
         resp = make_response(buf.getvalue())
         resp.headers['Content-Type'] = 'text/csv; charset=utf-8'

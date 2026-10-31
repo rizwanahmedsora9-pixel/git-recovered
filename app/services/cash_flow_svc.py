@@ -264,6 +264,219 @@ CF_SOURCE_LABELS = {
     SRC_ACCOUNT_EXPENSE: 'Other system-generated',
 }
 
+# ---------------------------------------------------------------------------
+# Section (module) attribution
+# ---------------------------------------------------------------------------
+# Every cash-flow row can be traced back to the screen it was posted from:
+# Cash Flow, Accounts, Bookings, Direct Sales, Supplier Payments, GRN, …
+# The label is derived from the source document stamped on the ledger row, so
+# historical entries get the column as well — no schema change / backfill.
+CF_SECTION_CASH_FLOW = 'Cash Flow'
+CF_SECTION_ACCOUNTS = 'Accounts'
+CF_SECTION_BOOKINGS = 'Bookings'
+CF_SECTION_DIRECT_SALES = 'Direct Sales'
+CF_SECTION_CLIENT_PAYMENTS = 'Client Payments'
+CF_SECTION_CLIENT_REFUNDS = 'Client Refunds'
+CF_SECTION_WAIVE_OFFS = 'Waive-Offs'
+CF_SECTION_SUPPLIER_PAYMENTS = 'Supplier Payments'
+CF_SECTION_GRN = 'GRN'
+CF_SECTION_SALES_RETURNS = 'Sales Returns'
+CF_SECTION_DELIVERY_RENT = 'Delivery & Rent'
+CF_SECTION_RECONCILIATION = 'Reconciliation'
+
+_CF_SECTION_BY_SOURCE = {
+    'cashflowentry': CF_SECTION_CASH_FLOW,
+    'manual_cash_flow': CF_SECTION_CASH_FLOW,
+    'transfer': CF_SECTION_CASH_FLOW,
+    'booking': CF_SECTION_BOOKINGS,
+    'directsale': CF_SECTION_DIRECT_SALES,
+    'direct_sale': CF_SECTION_DIRECT_SALES,
+    'sale': CF_SECTION_DIRECT_SALES,
+    'clientrefund': CF_SECTION_CLIENT_REFUNDS,
+    'client_refund': CF_SECTION_CLIENT_REFUNDS,
+    'supplierpayment': CF_SECTION_SUPPLIER_PAYMENTS,
+    'supplier_payment': CF_SECTION_SUPPLIER_PAYMENTS,
+    'supplier': CF_SECTION_SUPPLIER_PAYMENTS,
+    'grn': CF_SECTION_GRN,
+    'materialreturn': CF_SECTION_SALES_RETURNS,
+    'material_return': CF_SECTION_SALES_RETURNS,
+    'deliverypersonpayment': CF_SECTION_DELIVERY_RENT,
+    'delivery_person_payment': CF_SECTION_DELIVERY_RENT,
+    'driver_payment': CF_SECTION_DELIVERY_RENT,
+    'deliveryperson': CF_SECTION_DELIVERY_RENT,
+    'delivery_person': CF_SECTION_DELIVERY_RENT,
+    'deliveryrent': CF_SECTION_DELIVERY_RENT,
+    'delivery_rent': CF_SECTION_DELIVERY_RENT,
+    'saledeliveryperson': CF_SECTION_DELIVERY_RENT,
+    'sale_delivery_person': CF_SECTION_DELIVERY_RENT,
+    'accountreconciliation': CF_SECTION_RECONCILIATION,
+    'account_reconciliation': CF_SECTION_RECONCILIATION,
+    'account_receipt': CF_SECTION_ACCOUNTS,
+    'account_expense': CF_SECTION_ACCOUNTS,
+    'entry': CF_SECTION_ACCOUNTS,
+}
+
+_CF_SECTION_BY_TX_TYPE = {
+    'receipt': CF_SECTION_CLIENT_PAYMENTS,
+    'refund': CF_SECTION_CLIENT_REFUNDS,
+    'waive-off': CF_SECTION_WAIVE_OFFS,
+    'waive off': CF_SECTION_WAIVE_OFFS,
+    'discount / waive-off': CF_SECTION_WAIVE_OFFS,
+    'supplier payment': CF_SECTION_SUPPLIER_PAYMENTS,
+    'driver payment': CF_SECTION_DELIVERY_RENT,
+}
+
+
+def cf_section_label(source_type=None, transaction_type=None, *, default=CF_SECTION_CASH_FLOW):
+    """Human label for the app section that produced a cash-flow row."""
+    raw_source = (source_type or '').strip()
+    key = raw_source.lower().replace('-', '_').replace(' ', '_')
+    tx_key = (transaction_type or '').strip().lower()
+
+    if key in ('payment', 'client', 'client_payment'):
+        if tx_key in ('refund',):
+            return CF_SECTION_CLIENT_REFUNDS
+        if tx_key in ('loss', 'waive-off', 'waive off'):
+            return CF_SECTION_WAIVE_OFFS
+        return CF_SECTION_CLIENT_PAYMENTS
+
+    label = _CF_SECTION_BY_SOURCE.get(key)
+    if label:
+        if label == CF_SECTION_DELIVERY_RENT and tx_key == 'loss':
+            return CF_SECTION_WAIVE_OFFS
+        return label
+
+    if tx_key in _CF_SECTION_BY_TX_TYPE:
+        return _CF_SECTION_BY_TX_TYPE[tx_key]
+
+    if raw_source and raw_source.upper() not in ('SYSTEM', 'UNKNOWN'):
+        return raw_source.replace('_', ' ').strip().title()
+
+    return default
+
+
+# Source documents that hold the *creator* of a projected ledger row.  The
+# ledger row itself is often written by a sync helper without a user, so the
+# username is resolved from the document that was actually entered.
+_CF_CREATOR_SOURCES = {
+    'payment': ('Payment', 'created_by', None),
+    'client': ('Payment', 'created_by', None),
+    'client_payment': ('Payment', 'created_by', None),
+    'clientrefund': ('Payment', 'created_by', None),
+    'supplierpayment': ('SupplierPayment', 'created_by', None),
+    'supplier_payment': ('SupplierPayment', 'created_by', None),
+    'deliverypersonpayment': ('DeliveryPersonPayment', 'created_by', None),
+    'delivery_person_payment': ('DeliveryPersonPayment', 'created_by', None),
+    'accountreconciliation': ('AccountReconciliation', 'created_by', None),
+    'account_reconciliation': ('AccountReconciliation', 'created_by', None),
+    'materialreturn': ('MaterialReturn', 'created_by', 'payment'),
+    'material_return': ('MaterialReturn', 'created_by', 'payment'),
+}
+
+# Last resort: the structured accounting audit trail records who created the
+# document even when the document model has no ``created_by`` column.
+_CF_CREATOR_AUDIT_ENTITIES = {
+    'booking': ('Booking', 'Entry'),
+    'payment': ('Payment',),
+    'clientrefund': ('Payment',),
+    'supplierpayment': ('SupplierPayment',),
+    'supplier_payment': ('SupplierPayment',),
+    'grn': ('GRN', 'SupplierPayment'),
+    'directsale': ('DirectSale',),
+    'direct_sale': ('DirectSale',),
+    'materialreturn': ('MaterialReturn',),
+    'deliverypersonpayment': ('DeliveryPersonPayment',),
+}
+
+
+def _cf_chunks(values, size=400):
+    values = list(values)
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
+def _cf_creator_lookup(txs):
+    """Bulk-resolve ``(source_type, source_id) -> username`` for ledger rows.
+
+    Two batched lookups (one per document type, plus one audit-trail query) keep
+    this O(1) per page instead of a query per row.  Ids are chunked so a wide
+    date range ("All") can never trip SQLite's bound-parameter limit.
+    """
+    wanted = {}
+    for tx in txs:
+        if (getattr(tx, 'created_by', None) or '').strip():
+            continue
+        source_type = (getattr(tx, 'source_type', None) or '').strip().lower().replace(' ', '_')
+        source_id = getattr(tx, 'source_id', None)
+        if not source_type or not source_id:
+            continue
+        wanted.setdefault(source_type, set()).add(int(source_id))
+
+    resolved = {}
+    if not wanted:
+        return resolved
+
+    model_by_name = {
+        'Payment': Payment,
+        'SupplierPayment': SupplierPayment,
+        'DeliveryPersonPayment': DeliveryPersonPayment,
+        'AccountReconciliation': AccountReconciliation,
+        'MaterialReturn': MaterialReturn,
+    }
+    audit_wanted = {}
+    for source_type, ids in wanted.items():
+        spec = _CF_CREATOR_SOURCES.get(source_type)
+        if spec:
+            model_name, attr, via = spec
+            model = model_by_name.get(model_name)
+            if model is not None:
+                for chunk in _cf_chunks(ids):
+                    try:
+                        for obj in model.query.filter(model.id.in_(chunk)).all():
+                            name = (getattr(obj, attr, None) or '').strip()
+                            if not name and via:
+                                rel = getattr(obj, via, None)
+                                name = (getattr(rel, attr, None) or '').strip() if rel else ''
+                            if name:
+                                resolved[(source_type, int(obj.id))] = name
+                    except Exception:  # pragma: no cover - defensive only
+                        logging.getLogger(__name__).debug(
+                            'Cash flow creator lookup failed for %s', source_type, exc_info=True
+                        )
+                        break
+        unresolved_ids = {i for i in ids if (source_type, i) not in resolved}
+        for entity in _CF_CREATOR_AUDIT_ENTITIES.get(source_type, ()):
+            if unresolved_ids:
+                audit_wanted.setdefault(entity, set()).update(unresolved_ids)
+
+    if audit_wanted:
+        entity_types = list(audit_wanted.keys())
+        all_ids = sorted({i for ids in audit_wanted.values() for i in ids})
+        seen = set()
+        for chunk in _cf_chunks(all_ids):
+            try:
+                q = AccountingAuditLog.query.filter(
+                    AccountingAuditLog.entity_type.in_(entity_types),
+                    AccountingAuditLog.entity_id.in_(chunk),
+                ).order_by(AccountingAuditLog.created_at.asc(), AccountingAuditLog.id.asc())
+                for row in q.all():
+                    if not (row.username or '').strip():
+                        continue
+                    key = ((row.entity_type or '').strip().lower(), int(row.entity_id or 0))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Map the audit entity back to every source type that uses it.
+                    for source_type, entities in _CF_CREATOR_AUDIT_ENTITIES.items():
+                        if key[0] in [e.lower() for e in entities]:
+                            resolved.setdefault((source_type, key[1]), row.username.strip())
+            except Exception:  # pragma: no cover - defensive only
+                logging.getLogger(__name__).debug('Cash flow creator audit lookup failed', exc_info=True)
+                break
+
+    return resolved
+
+
 CF_PARTY_TYPES = [
     ('person', 'Person'),
     ('outsider', 'Outsider / other party'),
@@ -1109,6 +1322,7 @@ def _cf_row(
         'origin': origin,
         'origin_label': origin_label or CF_SOURCE_LABELS.get(source_type, source_type),
         'created_by': created_by or '',
+        'section_label': cf_section_label(source_type, direction),
         'status': status,
         'entry_id': entry_id,
         'tx_id': tx_id,
@@ -1147,7 +1361,12 @@ def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voi
 
     cf_entries = {e.account_tx_id: e for e in CashFlowEntry.query.filter(CashFlowEntry.account_tx_id.isnot(None)).all()}
 
-    for tx in tx_q.all():
+    txs = tx_q.all()
+    # Who made each entry: the ledger row may have been written by a sync helper
+    # without a user, so fall back to the source document / audit trail.
+    creator_by_source = _cf_creator_lookup(txs)
+
+    for tx in txs:
         from_acc = account_by_id.get(tx.from_account_id)
         to_acc = account_by_id.get(tx.to_account_id)
         
@@ -1231,7 +1450,21 @@ def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voi
             'source_type': source_type,
             'origin': origin,
             'origin_label': origin_label,
-            'created_by': tx.created_by or getattr(e, 'created_by', '') if e else '',
+            'created_by': (
+                (getattr(e, 'created_by', '') if e else '')
+                or (tx.created_by or '')
+                or creator_by_source.get(
+                    ((tx.source_type or '').strip().lower().replace(' ', '_'),
+                     int(tx.source_id or 0)),
+                    '',
+                )
+                or ''
+            ),
+            'section_label': cf_section_label(
+                tx.source_type or (source_type if e else None),
+                tx.transaction_type,
+                default=(CF_SECTION_CASH_FLOW if e else CF_SECTION_ACCOUNTS),
+            ),
             'status': 'voided' if tx.is_void else 'active',
             'entry_id': e.id if e else None,
             'tx_id': tx.id,
