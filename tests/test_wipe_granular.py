@@ -33,6 +33,8 @@ from models import (
     CashFlowEntry,
     CashFlowEntryAudit,
     CashFlowParty,
+    CashDayAccountPosition,
+    CashDayLock,
     CashFlowReconciliationAudit,
     CashFlowSubcategory,
     Client,
@@ -149,6 +151,17 @@ def seed_all_modules():
     cash_flow_adjustment = CashFlowDifferenceAdjustment(
         adjustment_date=now.date(), physical_cash_available=5000.0,
     )
+    # Daily Cash & Bank Reconciliation board state: a typed physical count and
+    # a verified day lock.  Both are account-keyed and must not outlive a wipe.
+    cash_day_position = CashDayAccountPosition(
+        position_date=now.date(), account_id=account.id, account_name=account.name,
+        opening=5000.0, expected_closing=5000.0, counted=4900.0, difference=-100.0,
+        is_locked=True,
+    )
+    cash_day_lock = CashDayLock(
+        lock_date=now.date(), total_expected=5000.0, total_counted=4900.0,
+        difference=-100.0,
+    )
     grn = GRN(supplier_id=supplier.id, supplier=supplier.name, manual_bill_no="WGRN-1")
     entry_out = Entry(
         date="24-08-2026", type="OUT", material=material.name,
@@ -168,7 +181,8 @@ def seed_all_modules():
     recon_basket = ReconBasket(bill_no="WPB-1", inv_client=client.name)
     db.session.add_all([
         material, account_tx, reconciliation, cash_flow_sub, cash_flow_entry,
-        drawer_entry, cash_flow_adjustment, grn, entry_out, delivery,
+        drawer_entry, cash_flow_adjustment, cash_day_position, cash_day_lock,
+        grn, entry_out, delivery,
         direct_sale, direct_sale_draft, invoice, payment, supplier_payment,
         follow_reminder, staff_email, booking, material_return, rental, recon_basket,
     ])
@@ -220,6 +234,7 @@ ALL_WIPE_TARGETS = [
     "invoices", "payments", "bookings", "accounts", "account_categories",
     "account_transactions", "account_reconciliations", "cash_flow_entries",
     "cash_flow_categories", "cash_reconciliation_data", "cash_reconciliation_audit",
+    "daily_reconciliation",
     "cash_drawer_entries", "cash_drawer_categories", "delivery_person_payments",
     "direct_sale_drafts", "fbm_rentals", "fbm_rental_clients", "fbm_rental_items",
 ]

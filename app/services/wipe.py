@@ -101,6 +101,134 @@ def reset_accounts_domain(session=None):
     return execute_domain_wipe('accounts_domain', session)
 
 
+def purge_daily_reconciliation_state(session=None):
+    """Erase the persisted Daily Cash & Bank Reconciliation board state.
+
+    The board's EXPECTED figures are always derived from the accounts and their
+    ledger, but the *stored* inputs — physically counted amounts, verified day
+    locks and their frozen totals — live in ``cash_day_account_position`` and
+    ``cash_day_lock``.  Those two tables were never part of any wipe, and they
+    are keyed by a numeric account id, which SQLite reuses after a delete.  A
+    wipe that left them behind therefore made the old figures reappear against
+    the freshly entered accounts (looking hard-coded).
+
+    Returns ``(positions_deleted, locks_deleted)``.
+    """
+    s = session or db.session
+    positions = 0
+    locks = 0
+    try:
+        positions = int(s.query(CashDayAccountPosition).delete(synchronize_session=False) or 0)
+    except Exception:
+        logging.getLogger('wipe').warning(
+            'Daily reconciliation position purge skipped', exc_info=True
+        )
+    try:
+        locks = int(s.query(CashDayLock).delete(synchronize_session=False) or 0)
+    except Exception:
+        logging.getLogger('wipe').warning(
+            'Daily reconciliation lock purge skipped', exc_info=True
+        )
+    logging.getLogger('wipe').info(
+        'Daily reconciliation state cleared: %s positions, %s day locks', positions, locks
+    )
+    return positions, locks
+
+
+def rebuild_account_balances_from_ledger(session=None):
+    """Re-derive each account's cached balance from its opening + live ledger.
+
+    Deleting ledger rows without touching ``Account.balance`` (the granular
+    "Account Transactions" reset) left every screen that starts from that
+    cached figure showing money that no longer existed — it looked like the
+    cash-flow/reconciliation numbers were hard-coded.  Balances are recomputed
+    in minor units from the account's own opening baseline, which is
+    materialised first for legacy rows (same rule as the startup backfill).
+
+    Transaction-neutral: the caller commits.  Returns the number of accounts
+    whose cached balance was rewritten.
+    """
+    from utils.money import from_minor, to_minor
+
+    logger = logging.getLogger('wipe')
+    s = session or db.session
+    amount_expr = func.coalesce(
+        AccountTransaction.amount_minor,
+        func.round(AccountTransaction.amount * 100.0),
+    )
+    try:
+        incoming_rows = s.query(
+            AccountTransaction.to_account_id,
+            func.coalesce(func.sum(amount_expr), 0),
+        ).filter(
+            AccountTransaction.is_void == False,  # noqa: E712
+            AccountTransaction.to_account_id.isnot(None),
+        ).group_by(AccountTransaction.to_account_id).all()
+        outgoing_rows = s.query(
+            AccountTransaction.from_account_id,
+            func.coalesce(func.sum(amount_expr), 0),
+        ).filter(
+            AccountTransaction.is_void == False,  # noqa: E712
+            AccountTransaction.from_account_id.isnot(None),
+        ).group_by(AccountTransaction.from_account_id).all()
+    except Exception:
+        logger.exception('Could not aggregate the ledger while rebuilding balances')
+        return 0
+
+    incoming = {int(row[0]): int(round(float(row[1] or 0))) for row in incoming_rows}
+    outgoing = {int(row[0]): int(round(float(row[1] or 0))) for row in outgoing_rows}
+
+    changed = 0
+    for account in s.query(Account).all():
+        inc = incoming.get(account.id, 0)
+        out = outgoing.get(account.id, 0)
+        if getattr(account, 'opening_balance_minor', None) is not None:
+            baseline = int(account.opening_balance_minor)
+        elif getattr(account, 'opening_balance', None) is not None:
+            baseline = int(to_minor(account.opening_balance))
+        else:
+            # No explicit baseline yet: freeze the current inference so later
+            # ledger changes can never shift the opening.
+            baseline = int(to_minor(account.balance or 0)) - inc + out
+            account.opening_balance_minor = baseline
+            account.opening_balance = float(from_minor(baseline))
+        new_minor = baseline + inc - out
+        account.balance_minor = new_minor
+        account.balance = float(from_minor(new_minor))
+        changed += 1
+    logger.info('Rebuilt cached balances for %s accounts from the ledger', changed)
+    return changed
+
+
+def _null_self_references(model, session):
+    """NULL self-referencing FK columns so a bulk delete cannot trip SQLite FK.
+
+    ``AccountReconciliation.previous_reconciliation_id`` points at the same
+    table; deleting those rows in one statement while another row still links
+    to one of them aborts under immediate FK checks.
+    """
+    table = getattr(model, '__table__', None)
+    if table is None:
+        return
+    id_col = getattr(table.c, 'id', None)
+    if id_col is None:
+        return
+    for column in table.columns:
+        if column is id_col:
+            continue
+        fks = list(getattr(column, 'foreign_keys', []) or [])
+        if any(fk.column is id_col for fk in fks):
+            try:
+                session.query(model).update(
+                    {column.name: None}, synchronize_session=False
+                )
+            except Exception:
+                logging.getLogger('wipe').warning(
+                    'Could not null self reference %s.%s', table.name, column.name,
+                    exc_info=True,
+                )
+
+
 def _resolve_model_class(model_name):
     """Resolve a model name string to its actual SQLAlchemy class.
     
@@ -146,6 +274,7 @@ def execute_domain_wipe(domain_name, session=None):
                 logger.warning('Wipe: refusing to delete identity table %s', table_name or model_name)
                 continue
             try:
+                _null_self_references(model, s)
                 deleted = s.query(model).delete()
                 table_name = getattr(model, '__tablename__', model_name)
                 operations.append((table_name, 'deleted', int(deleted or 0)))
@@ -328,7 +457,7 @@ def _wipe_dataset_preview_map():
         'invoices': {'label': 'Invoices', 'tables': ['invoice'], 'queries': [('invoice', q(Invoice))]},
         'payments': {'label': 'Payments', 'tables': ['payment', 'waive_off', 'pending_bill'], 'queries': [('payment', q(Payment)), ('waive_off', q(WaiveOff))]},
         'bookings': {'label': 'Bookings', 'tables': ['booking_item', 'booking', 'pending_bill'], 'queries': [('booking_item', q(BookingItem)), ('booking', q(Booking))]},
-        'accounts': {'label': 'Financial Accounts', 'tables': ['account', 'account_transaction', 'fbm_cash_drawer_entry', 'fbm_cash_drawer_category', 'cash_flow_difference_adjustment', 'cash_flow_reconciliation_audit'], 'queries': [('account', q(Account)), ('account_transaction', q(AccountTransaction)), ('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
+        'accounts': {'label': 'Financial Accounts', 'tables': ['account', 'account_transaction', 'account_reconciliation', 'fbm_cash_drawer_entry', 'fbm_cash_drawer_category', 'cash_flow_entry', 'cash_flow_entry_audit', 'cash_flow_difference_adjustment', 'cash_flow_reconciliation_audit', 'cash_day_account_position', 'cash_day_lock'], 'queries': [('account', q(Account)), ('account_transaction', q(AccountTransaction)), ('account_reconciliation', q(AccountReconciliation)), ('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock)), ('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
         'account_categories': {'label': 'Account Categories', 'tables': ['account_category'], 'queries': [('account_category', q(AccountCategory))]},
         'cash_drawer_entries': {'label': 'Cash Drawer Entries', 'tables': ['fbm_cash_drawer_entry'], 'queries': [('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
         'cash_drawer_categories': {'label': 'Cash Drawer Categories', 'tables': ['fbm_cash_drawer_category'], 'queries': [('fbm_cash_drawer_category', q(FbmCashDrawerCategory))]},
@@ -336,6 +465,7 @@ def _wipe_dataset_preview_map():
         'account_reconciliations': {'label': 'Account Reconciliations', 'tables': ['account_reconciliation'], 'queries': [('account_reconciliation', q(AccountReconciliation))]},
         'cash_flow_entries': {'label': 'Cash Flow Entries', 'tables': ['cash_flow_entry', 'cash_flow_entry_audit'], 'queries': [('cash_flow_entry', q(CashFlowEntry)), ('cash_flow_entry_audit', q(CashFlowEntryAudit))]},
         'cash_flow_categories': {'label': 'Cash Flow Categories & Parties', 'tables': ['cash_flow_category', 'cash_flow_subcategory', 'cash_flow_party'], 'queries': [('cash_flow_category', q(CashFlowCategory)), ('cash_flow_subcategory', q(CashFlowSubcategory)), ('cash_flow_party', q(CashFlowParty))]},
+        'daily_reconciliation': {'label': 'Daily Reconciliation Counts & Locks', 'tables': ['cash_day_account_position', 'cash_day_lock'], 'queries': [('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock))]},
         'cash_reconciliation_data': {'label': 'Cash Reconciliation Data', 'tables': ['cash_flow_difference_adjustment'], 'queries': [('cash_flow_difference_adjustment', q(CashFlowDifferenceAdjustment))]},
         'cash_reconciliation_audit': {'label': 'Cash Audit Trail', 'tables': ['cash_flow_reconciliation_audit'], 'queries': [('cash_flow_reconciliation_audit', q(CashFlowReconciliationAudit))]},
         'delivery_person_payments': {'label': 'Driver Payments', 'tables': ['delivery_person_payment'], 'queries': [('delivery_person_payment', q(DeliveryPersonPayment))]},

@@ -27,7 +27,10 @@ def delete_selected_data():
         'clients': ['recon_basket', 'bookings', 'pending_bills', 'payments', 'direct_sales', 'entry', 'fbm_rental_clients', 'accounts', 'account_transactions', 'accounts_domain_wipe'],
         'suppliers': ['grn', 'supplier_payments', 'payments', 'invoices', 'accounts_domain_wipe'],
         'direct_sales': ['direct_sales', 'entry', 'invoice', 'invoices', 'delivery_person_payments', 'pending_bills', 'payments', 'accounts_domain_wipe'],
-        'accounts': ['accounts', 'account_transactions', 'account_reconciliations', 'cash_flow_entries', 'payments', 'supplier_payments', 'grn', 'direct_sales', 'fbm_rentals'],
+        # A financial-domain reset must also drop the persisted physical counts,
+        # day locks and cash-reconciliation snapshots — otherwise the old
+        # figures reappear against the new accounts (SQLite reuses account ids).
+        'accounts': ['accounts', 'account_transactions', 'account_reconciliations', 'cash_flow_entries', 'cash_reconciliation_data', 'cash_reconciliation_audit', 'daily_reconciliation', 'cash_drawer_entries', 'payments', 'supplier_payments', 'grn', 'direct_sales', 'fbm_rentals'],
         'payments': ['payments', 'supplier_payments', 'delivery_person_payments', 'pending_bills', 'account_transactions', 'accounts_domain_wipe'],
         'invoices': ['invoices', 'direct_sales', 'entry', 'pending_bills', 'accounts_domain_wipe'],
         'bookings': ['bookings', 'booking_item', 'pending_bills', 'accounts_domain_wipe'],
@@ -196,6 +199,10 @@ def delete_selected_data():
             _tq(FbmCashDrawerCategory).delete()
             _tq(CashFlowReconciliationAudit).delete()
             _tq(CashFlowDifferenceAdjustment).delete()
+            # Daily board state (typed counts + verified locks) is account-keyed
+            # and has no FK to ``account``, so it must be removed explicitly
+            # here — before the account rows it refers to disappear.
+            purge_daily_reconciliation_state()
             _tq(CashFlowSubcategory).delete()
             _tq(CashFlowCategory).delete()
             _tq(CashFlowParty).delete()
@@ -386,10 +393,30 @@ def delete_selected_data():
             _tq(CashFlowDifferenceAdjustment).delete()
             deleted_info.append('Cash Reconciliation Data')
 
+        if 'daily_reconciliation' in targets:
+            # Physical counts typed on the Daily Cash & Bank board plus the
+            # verified day locks.  These are the only persisted figures on that
+            # page, so leaving them behind makes old numbers reappear on new
+            # accounts after a wipe.
+            positions_removed, locks_removed = purge_daily_reconciliation_state()
+            if positions_removed or locks_removed:
+                deleted_info.append(
+                    f'Daily Reconciliation ({positions_removed} counts / {locks_removed} day locks)'
+                )
+
         if 'account_transactions' in targets:
             # Cash-flow rows link to ledger rows; drop the link before removal.
             _tq(CashFlowEntry).update({'account_tx_id': None}, synchronize_session=False)
             _tq(AccountTransaction).delete()
+            # The cached account balance is derived from these rows: without a
+            # rebuild the Accounts / Cash Flow screens would keep showing the
+            # deleted movements as if they were still on the ledger.
+            try:
+                rebuild_account_balances_from_ledger()
+            except Exception:
+                logging.getLogger('wipe').exception(
+                    'Balance rebuild failed after account_transactions wipe'
+                )
             deleted_info.append('Account Transactions')
 
         if 'account_reconciliations' in targets:
@@ -486,20 +513,52 @@ def delete_selected_data():
             # Nullify payment-account links but preserve the account records.
             _tq(Payment).update({'payment_account_id': None}, synchronize_session=False)
             _tq(SupplierPayment).update({'payment_account_id': None}, synchronize_session=False)
+            # Physical counts / verified day locks are ledger-derived state too:
+            # they must not survive a reset or they repopulate the next board.
+            try:
+                purge_daily_reconciliation_state()
+            except Exception:
+                logging.getLogger('wipe').exception(
+                    'Daily reconciliation purge failed during accounts wipe'
+                )
+            try:
+                _tq(AccountReconciliation).update({'previous_reconciliation_id': None}, synchronize_session=False)
+                _tq(AccountReconciliation).delete()
+            except Exception:
+                pass
             # Reset balances on all accounts to zero.
             _tq(Account).update({'balance': 0}, synchronize_session=False)
-            deleted_info.append('Financial Accounts (transactions cleared, balances reset)')
+            deleted_info.append('Financial Accounts (transactions, reconciliations & counts cleared, balances reset)')
 
         # ACCOUNTS_DOMAIN_WIPE: additional domain that aggressively clears
         # all accounting snapshots, rollups and cash/bank state after wipes.
         if 'accounts_domain_wipe' in targets or is_full_wipe:
             # Delete transaction-level data and snapshot tables.
             try:
-                # Cash-flow rows link to ledger rows; drop the link first.
-                _tq(CashFlowEntry).update({'account_tx_id': None}, synchronize_session=False)
+                # Cash-flow rows link to ledger rows and pin the account ids they
+                # were booked against; they belong to the wiped ledger, so they
+                # go with it (otherwise the cash-flow screens keep showing the
+                # previous dataset's money movements).
+                _tq(CashFlowEntryAudit).delete()
+                _tq(CashFlowEntry).delete()
                 _tq(AccountTransaction).delete()
             except Exception:
                 pass
+            # Per-account reconciliation history and the Daily Reconciliation
+            # board's typed counts / day locks: account-keyed, no FK to the
+            # account row, so they would otherwise attach to new accounts whose
+            # ids SQLite reuses.
+            try:
+                _tq(AccountReconciliation).update({'previous_reconciliation_id': None}, synchronize_session=False)
+                _tq(AccountReconciliation).delete()
+            except Exception:
+                pass
+            try:
+                purge_daily_reconciliation_state()
+            except Exception:
+                logging.getLogger('wipe').exception(
+                    'Daily reconciliation purge failed during accounts domain wipe'
+                )
             try:
                 _tq(FbmCashDrawerEntry).delete()
             except Exception:

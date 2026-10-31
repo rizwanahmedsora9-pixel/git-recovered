@@ -332,6 +332,29 @@ def create_app(test_config: dict | None = None) -> Flask:
                 exc_info=True,
             )
 
+        # Daily Cash & Bank Reconciliation stores the physically counted
+        # amounts and verified day locks against a numeric account id.  Older
+        # wipes left those rows behind, and SQLite hands a deleted id back out
+        # to the next account created — so the board showed figures nobody
+        # typed for the new accounts.  Purge anything that cannot belong to the
+        # accounts that exist now.  The board repeats this on every render;
+        # running it at boot means an existing database is repaired on restart
+        # even if the page is never opened.
+        try:
+            from app.services.cash_day_recon import purge_stale_reconciliation_state
+
+            stale_positions, stale_locks = purge_stale_reconciliation_state()
+            if stale_positions or stale_locks:
+                logging.getLogger(__name__).info(
+                    "Purged stale daily reconciliation state: %s positions, %s day locks",
+                    stale_positions,
+                    stale_locks,
+                )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Daily reconciliation startup cleanup skipped", exc_info=True
+            )
+
     # Start once at application startup, never from a user request. The
     # cross-process filesystem lock prevents duplicate work under Gunicorn.
     from app.services.maintenance import start_embedded_scheduler

@@ -338,6 +338,8 @@ from app.services.wipe import (  # noqa: F401
     _wipe_preview_for_targets,
     accounts_domain_post_reset,
     execute_domain_wipe,
+    purge_daily_reconciliation_state,
+    rebuild_account_balances_from_ledger,
     reset_accounts_domain,
     verify_accounts_domain_wipe_integrity,
 )
@@ -628,6 +630,8 @@ __all__ = [
     '_wipe_preview_for_targets',
     'accounts_domain_post_reset',
     'execute_domain_wipe',
+    'purge_daily_reconciliation_state',
+    'rebuild_account_balances_from_ledger',
     'reset_accounts_domain',
     'verify_accounts_domain_wipe_integrity',
     'hard_delete_transaction',
