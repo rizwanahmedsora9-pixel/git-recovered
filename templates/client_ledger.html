@@ -1,52 +1,154 @@
 {% extends "layout.html" %}
 {% block content %}
+{# ---------------------------------------------------------------------------
+   Client header
+   A single, calm block: identity on the left, the three money figures under
+   it, the client's contact/account details in an even grid, and only the
+   primary actions on the right (the rest live in the "More" menu) so the top
+   of the page never turns into a wall of buttons.
+   --------------------------------------------------------------------------- #}
+{% set _ob = client.opening_balance or 0 %}
+{% set _obd = client.opening_balance_date or client.created_at %}
+{% set _name_parts = (client.name or '?').split() %}
 <div class="ledger-print-area">
-<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
-    <div>
-        <h2 class="mb-1 text-warning">Client Ledger: {{ client.name }}</h2>
-        <span class="badge bg-dark border border-secondary text-info">Client Code: {{ client.code or 'N/A' }}</span>
-        <span class="badge bg-dark border border-secondary text-warning">Category: {{ client.category or 'General' }}</span>
-        <div class="small mt-2 {{ 'text-danger' if (client.opening_balance or 0) > 0 else ('text-success' if (client.opening_balance or 0) < 0 else 'text-white-50') }}">
-            Opening Balance: {{ "{:,.2f}".format(client.opening_balance or 0) }}
-            {% set _obd = client.opening_balance_date or client.created_at %}
-            {% if _obd %} on {{ _obd.strftime('%Y-%m-%d') }}{% endif %}
-            {% if (client.opening_balance or 0) > 0 %}(Pending Due){% elif (client.opening_balance or 0) < 0 %}(Advance/Credit){% endif %}
+<header class="cl-hero">
+    <div class="cl-hero-top">
+        <div class="cl-hero-id">
+            <div class="cl-avatar" aria-hidden="true">{{ (_name_parts[0][:1] ~ (_name_parts[1][:1] if _name_parts|length > 1 else ''))|upper }}</div>
+            <div class="cl-hero-text">
+                <nav class="cl-crumbs" aria-label="Breadcrumb">
+                    <a href="{{ url_for('clients') }}"><i class="bi bi-people"></i>Client Ledger</a>
+                    <i class="bi bi-chevron-right"></i>
+                    <span>{{ client.code or 'No code' }}</span>
+                </nav>
+                <h1 class="cl-name">{{ client.name }}</h1>
+                <div class="cl-chips">
+                    <span class="cl-chip cl-chip-code"><i class="bi bi-hash"></i>{{ client.code or 'N/A' }}</span>
+                    <span class="cl-chip"><i class="bi bi-tag"></i>{{ client.category or 'General' }}</span>
+                    {% if client.is_active %}
+                    <span class="cl-chip cl-chip-ok"><span class="cl-dot"></span>Active</span>
+                    {% else %}
+                    <span class="cl-chip cl-chip-off"><span class="cl-dot"></span>Suspended</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="cl-hero-actions d-print-none">
+            <a href="{{ url_for('download_full_client_history', id=client.id) }}" class="btn btn-warning btn-sm fw-bold">
+                <i class="bi bi-file-earmark-pdf me-1"></i> Full History PDF
+            </a>
+            <a href="{{ url_for('download_client_clearance', id=client.id) }}" class="btn btn-outline-success btn-sm fw-bold">
+                <i class="bi bi-file-earmark-text me-1"></i> Clearance
+            </a>
+            <a href="{{ url_for('payments_page', party='customer', client=client.code or client.name) }}" class="btn btn-outline-info btn-sm fw-bold">
+                <i class="bi bi-cash-coin me-1"></i> Pay Remaining
+            </a>
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm fw-bold cl-more-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-three-dots me-1"></i> More
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end cl-more-menu shadow">
+                    <li>
+                        <button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#openingBalanceModal">
+                            <i class="bi bi-wallet2"></i>Set Opening Balance
+                        </button>
+                    </li>
+                    <li>
+                        <form action="{{ url_for('client_toggle_active', client_id=client.id) }}" method="POST">
+                            {% if client.is_active %}
+                            <button type="submit" class="dropdown-item" onclick="return confirm('Suspend this client? Deliveries will be blocked.');">
+                                <i class="bi bi-pause-circle"></i>Suspend Delivery
+                            </button>
+                            {% else %}
+                            <button type="submit" class="dropdown-item" onclick="return confirm('Re-activate this client? Deliveries will be allowed.');">
+                                <i class="bi bi-play-circle"></i>Resume Delivery
+                            </button>
+                            {% endif %}
+                        </form>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#cancelBookingModal">
+                            <i class="bi bi-x-octagon"></i>Cancel Remaining Booking
+                        </button>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('download_client_ledger', id=client.id) }}?action=print" target="_blank">
+                            <i class="bi bi-printer"></i>Print Ledger
+                        </a>
+                    </li>
+                    {% if current_user.role in ('admin', 'root') or current_user.can_manage_clients %}
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('manage_client_categories') }}">
+                            <i class="bi bi-tags"></i>Manage Categories
+                        </a>
+                    </li>
+                    {% endif %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('clients') }}">
+                            <i class="bi bi-arrow-left"></i>Back to Client List
+                        </a>
+                    </li>
+                </ul>
+            </div>
         </div>
     </div>
-    <div class="d-flex gap-2 flex-wrap ledger-toolbar">
-        <button class="btn btn-outline-info d-print-none btn-sm" data-bs-toggle="modal" data-bs-target="#openingBalanceModal">
-            <i class="bi bi-wallet2"></i> Set Opening Balance
-        </button>
-        <form action="{{ url_for('client_toggle_active', client_id=client.id) }}" method="POST" class="d-print-none">
-            {% if client.is_active %}
-            <button class="btn btn-outline-danger btn-sm" onclick="return confirm('Suspend this client? Deliveries will be blocked.');">
-                <i class="bi bi-pause-circle me-1"></i> Suspend Delivery
-            </button>
-            {% else %}
-            <button class="btn btn-outline-success btn-sm" onclick="return confirm('Re-activate this client? Deliveries will be allowed.');">
-                <i class="bi bi-play-circle me-1"></i> Resume Delivery
-            </button>
-            {% endif %}
-        </form>
-        <button class="btn btn-outline-warning d-print-none btn-sm" data-bs-toggle="modal" data-bs-target="#cancelBookingModal">
-            <i class="bi bi-x-octagon me-1"></i> Cancel Remaining Booking
-        </button>
-        <a href="{{ url_for('download_client_clearance', id=client.id) }}" class="btn btn-outline-success d-print-none btn-sm fw-bold">
-            <i class="bi bi-file-earmark-text me-1"></i> Clearance Statement
-        </a>
-        <a href="{{ url_for('payments_page', party='customer', client=client.code or client.name) }}" class="btn btn-outline-info d-print-none btn-sm fw-bold">
-            <i class="bi bi-cash-coin me-1"></i> Pay Remaining
-        </a>
-        <a href="{{ url_for('download_full_client_history', id=client.id) }}" class="btn btn-warning d-print-none btn-sm text-dark fw-bold">
-            <i class="bi bi-file-earmark-pdf me-1"></i> Download Full History PDF
-        </a>
-        <a href="{{ url_for('download_client_ledger', id=client.id) }}?action=print" target="_blank" class="btn btn-outline-primary d-print-none btn-sm"><i class="bi bi-printer"></i> Print</a>
-        {% if current_user.role in ('admin', 'root') or current_user.can_manage_clients %}
-        <a href="{{ url_for('manage_client_categories') }}" class="btn btn-outline-light btn-sm d-print-none fw-bold"><i class="bi bi-tags me-1"></i> Manage Categories</a>
-        {% endif %}
-        <a href="{{ url_for('clients') }}" class="btn btn-outline-secondary btn-sm d-print-none">Back</a>
+
+    <div class="cl-stats">
+        <div class="cl-stat">
+            <div class="cl-stat-label"><i class="bi bi-arrow-up-right-circle"></i>Total Due (Debit)</div>
+            <div class="cl-stat-value cl-debit">{{ "{:,.2f}".format(total_debit or 0) }}</div>
+        </div>
+        <div class="cl-stat">
+            <div class="cl-stat-label"><i class="bi bi-arrow-down-left-circle"></i>Total Paid / Credit</div>
+            <div class="cl-stat-value cl-credit">{{ "{:,.2f}".format(total_credit or 0) }}</div>
+        </div>
+        <div class="cl-stat cl-stat-net">
+            <div class="cl-stat-label"><i class="bi bi-wallet2"></i>Net Balance</div>
+            <div class="cl-stat-value {% if (total_balance or 0) > 0 %}cl-debit{% elif (total_balance or 0) < 0 %}cl-credit{% endif %}">
+                {{ "{:,.2f}".format(total_balance or 0) }}
+            </div>
+            <div class="cl-stat-sub">
+                {% if (total_balance or 0) > 0 %}Client owes company{% elif (total_balance or 0) < 0 %}Company owes client{% else %}Account settled{% endif %}
+            </div>
+        </div>
     </div>
-</div>
+
+    <dl class="cl-details">
+        <div class="cl-detail">
+            <dt><i class="bi bi-telephone"></i>Phone</dt>
+            <dd>{{ client.phone or '—' }}</dd>
+        </div>
+        <div class="cl-detail">
+            <dt><i class="bi bi-geo-alt"></i>Address</dt>
+            <dd>{{ client.address or '—' }}</dd>
+        </div>
+        <div class="cl-detail">
+            <dt><i class="bi bi-wallet2"></i>Opening Balance</dt>
+            <dd class="{% if _ob > 0 %}cl-debit{% elif _ob < 0 %}cl-credit{% endif %}">
+                {{ "{:,.2f}".format(_ob) }}
+                <span class="cl-detail-sub">
+                    {% if _ob > 0 %}Pending due{% elif _ob < 0 %}Advance / credit{% else %}Settled{% endif %}
+                    {% if _obd %}&middot; {{ _obd.strftime('%d %b %Y') }}{% endif %}
+                </span>
+            </dd>
+        </div>
+        <div class="cl-detail">
+            <dt><i class="bi bi-calendar3"></i>Client Since</dt>
+            <dd>{{ client.created_at.strftime('%d %b %Y') if client.created_at else '—' }}</dd>
+        </div>
+        {% if client.book_no or client.financial_page %}
+        <div class="cl-detail">
+            <dt><i class="bi bi-journal-bookmark"></i>Book / Page</dt>
+            <dd>
+                {{ client.book_no or '—' }}
+                {% if client.financial_page %}<span class="cl-detail-sub">Ledger page {{ client.financial_page }}</span>{% endif %}
+            </dd>
+        </div>
+        {% endif %}
+    </dl>
+</header>
 
 <div class="modal fade" id="openingBalanceModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
@@ -191,17 +293,23 @@ function submitCancelSelection{{ client.id }}() {
 }
 </script>
 
-<!-- Tab navigation: Ledger (existing view) + Material Analysis (client's
-     billed material breakdown).  Unique tab name — no other tab exists. -->
-<ul class="nav nav-tabs border-bottom mb-4 d-print-none" role="tablist">
+{# Tab navigation directly under the header: Ledger (existing view) +
+   Material Analysis (client's billed material breakdown).  Rendered as one
+   full-width segmented bar so the two views read as siblings, not as
+   buttons floating above the content. #}
+<ul class="nav nav-tabs cl-tabs d-print-none" role="tablist">
     <li class="nav-item" role="presentation">
         <button class="nav-link active" id="ledger-tab" data-bs-toggle="tab" data-bs-target="#ledgerPane" type="button" role="tab" aria-controls="ledgerPane" aria-selected="true">
-            <i class="bi bi-journal-text me-1"></i>Ledger
+            <i class="bi bi-journal-text"></i>
+            <span>Ledger</span>
+            <span class="cl-tab-badge">{{ financial_history|length }}</span>
         </button>
     </li>
     <li class="nav-item" role="presentation">
         <button class="nav-link" id="material-analysis-tab" data-bs-toggle="tab" data-bs-target="#materialAnalysisPane" type="button" role="tab" aria-controls="materialAnalysisPane" aria-selected="false">
-            <i class="bi bi-pie-chart-line me-1"></i>Material Analysis
+            <i class="bi bi-pie-chart-line"></i>
+            <span>Material Analysis</span>
+            <span class="cl-tab-badge">{{ material_grand.materials }}</span>
         </button>
     </li>
 </ul>
@@ -209,33 +317,10 @@ function submitCancelSelection{{ client.id }}() {
 <div class="tab-content">
 <div class="tab-pane fade show active" id="ledgerPane" role="tabpanel" aria-labelledby="ledger-tab">
 
-<!-- Ledger totals: same three figures the print/PDF summary carries, so the
-     on-screen view and the exported document can never disagree. -->
-<div class="row g-3 mb-4 ledger-totals-row">
-    <div class="col-md-4">
-        <div class="p-3 rounded border border-secondary h-100" style="background: #1e293b;">
-            <div class="text-white-50 small"><i class="bi bi-arrow-up-right-circle me-1"></i>Total Due (Debit)</div>
-            <div class="text-danger fw-bold fs-5">{{ "{:,.2f}".format(total_debit or 0) }}</div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="p-3 rounded border border-secondary h-100" style="background: #1e293b;">
-            <div class="text-white-50 small"><i class="bi bi-arrow-down-left-circle me-1"></i>Total Paid / Credit</div>
-            <div class="text-success fw-bold fs-5">{{ "{:,.2f}".format(total_credit or 0) }}</div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="p-3 rounded border border-secondary h-100" style="background: #1e293b;">
-            <div class="text-white-50 small"><i class="bi bi-wallet2 me-1"></i>Net Balance</div>
-            <div class="fw-bold fs-5 {% if (total_balance or 0) < 0 %}text-success{% elif (total_balance or 0) > 0 %}text-danger{% else %}text-info{% endif %}">
-                {{ "{:,.2f}".format(total_balance or 0) }}
-            </div>
-            <div class="text-white-50 small mt-1">
-                {% if (total_balance or 0) > 0 %}Client owes company{% elif (total_balance or 0) < 0 %}Company owes client{% else %}Settled{% endif %}
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Ledger totals (Total Due / Total Paid / Net Balance) now live in the page
+     header (.cl-stats) so they stay visible on every tab and are not repeated
+     twice on one screen.  They are the same three figures the print/PDF
+     summary carries. -->
 
 <!-- Financial Ledger Section -->
 <div class="card border-0 shadow-sm mb-4 financial-ledger-card" style="background: #1e293b; border: 2px solid #475569 !important; border-radius: 15px;">
@@ -1351,12 +1436,346 @@ function submitCancelSelection{{ client.id }}() {
     .ma-share-bar { display: none; }
     .ma-kpi-value { font-size: 1.05rem; }
 }
+/* ==========================================================================
+   Client header + tab bar
+   One calm block at the top of the page: identity, the three money figures,
+   the client's own details, and a single row of actions.  Everything uses the
+   app theme tokens so it holds up in both the dark and light themes.
+   ========================================================================== */
+.cl-hero {
+    --cl-debit-color: #fb7185;
+    --cl-credit-color: #34d399;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+    padding: 1.25rem 1.35rem;
+    margin-bottom: 1rem;
+    background: linear-gradient(135deg,
+        color-mix(in srgb, var(--accent) 9%, var(--surface-1)) 0%,
+        var(--surface-1) 42%,
+        var(--surface-1) 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: 18px;
+    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.16);
+}
+html[data-theme="light"] .cl-hero {
+    --cl-debit-color: #be123c;
+    --cl-credit-color: #047857;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+}
+.cl-hero .cl-debit { color: var(--cl-debit-color) !important; }
+.cl-hero .cl-credit { color: var(--cl-credit-color) !important; }
+
+.cl-hero-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem 1.5rem;
+    flex-wrap: wrap;
+}
+.cl-hero-id {
+    display: flex;
+    align-items: center;
+    gap: 0.95rem;
+    min-width: 0;
+    flex: 1 1 320px;
+}
+.cl-avatar {
+    flex: 0 0 auto;
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: #231800;
+    background: linear-gradient(135deg, #fbbf24 0%, #d97706 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), 0 6px 16px rgba(217, 119, 6, 0.28);
+}
+.cl-hero-text { min-width: 0; }
+.cl-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    line-height: 1.2;
+}
+.cl-crumbs a {
+    color: var(--text-muted);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.cl-crumbs a:hover { color: var(--accent); }
+.cl-crumbs i { font-size: 0.7rem; opacity: 0.75; }
+.cl-name {
+    margin: 0.2rem 0 0.5rem;
+    font-size: 1.55rem;
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: 0.2px;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+.cl-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.cl-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.22rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+    line-height: 1.3;
+    white-space: nowrap;
+}
+.cl-chip i { color: var(--accent); font-size: 0.78rem; }
+.cl-chip-code { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.cl-chip-ok {
+    color: #34d399;
+    border-color: color-mix(in srgb, #34d399 45%, transparent);
+    background: color-mix(in srgb, #34d399 12%, transparent);
+}
+.cl-chip-off {
+    color: #fb7185;
+    border-color: color-mix(in srgb, #fb7185 45%, transparent);
+    background: color-mix(in srgb, #fb7185 12%, transparent);
+}
+html[data-theme="light"] .cl-chip-ok { color: #047857; }
+html[data-theme="light"] .cl-chip-off { color: #be123c; }
+.cl-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    display: inline-block;
+}
+
+/* Actions: three primary actions + a "More" menu for everything else. */
+.cl-hero-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    flex: 0 1 auto;
+}
+.cl-hero-actions .btn {
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.cl-more-menu {
+    min-width: 245px;
+    padding: 0.35rem;
+    border-radius: 12px;
+    background: var(--surface-1);
+    border: 1px solid var(--border-strong);
+}
+.cl-more-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: transparent;
+}
+.cl-more-menu .dropdown-item i {
+    width: 1.05rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+.cl-more-menu .dropdown-item:hover,
+.cl-more-menu .dropdown-item:focus {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.cl-more-menu .dropdown-item:hover i,
+.cl-more-menu .dropdown-item:focus i { color: var(--accent); }
+.cl-more-menu form { margin: 0; }
+.cl-more-menu .dropdown-divider { border-color: var(--border-color); opacity: 1; }
+
+/* Money figures */
+.cl-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+.cl-stat {
+    padding: 0.7rem 0.9rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+.cl-stat-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.2rem;
+}
+.cl-stat-label i { color: var(--accent); font-size: 0.82rem; }
+.cl-stat-value {
+    font-size: 1.28rem;
+    font-weight: 800;
+    line-height: 1.2;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.cl-stat-sub {
+    margin-top: 0.15rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+/* Client details: an even, labelled grid instead of a run-on line. */
+.cl-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem 1.5rem;
+    margin: 0;
+    padding-top: 0.95rem;
+    border-top: 1px dashed var(--border-color);
+}
+.cl-detail { min-width: 0; }
+.cl-detail dt {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.2rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.cl-detail dt i { color: var(--accent); font-size: 0.82rem; }
+.cl-detail dd {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+.cl-detail-sub {
+    display: block;
+    margin-top: 0.1rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* Tab bar: one segmented control, directly under the header. */
+.cl-tabs.nav-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.35rem;
+    padding: 0.35rem;
+    margin-bottom: 1.25rem;
+    border: 1px solid var(--border-strong) !important;
+    border-radius: 14px;
+    background: var(--surface-1);
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+.cl-tabs .nav-item { flex: 1 1 0; min-width: 0; }
+.cl-tabs .nav-link {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.62rem 0.9rem !important;
+    border: 1px solid transparent !important;
+    border-radius: 10px !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    font-size: 0.9rem;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.cl-tabs .nav-link i { font-size: 1rem; }
+.cl-tabs .nav-link:hover,
+.cl-tabs .nav-link:focus-visible {
+    color: var(--text-primary) !important;
+    background: color-mix(in srgb, var(--text-primary) 6%, transparent) !important;
+}
+.cl-tabs .nav-link.active {
+    color: #231800 !important;
+    background: linear-gradient(135deg, #fbbf24 0%, #d97706 100%) !important;
+    box-shadow: 0 4px 14px rgba(217, 119, 6, 0.3);
+}
+.cl-tab-badge {
+    min-width: 1.5rem;
+    padding: 0.05rem 0.42rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    font-size: 0.72rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+}
+
+@media (max-width: 991.98px) {
+    .cl-hero-actions { justify-content: flex-start; }
+}
+@media (max-width: 767.98px) {
+    .cl-hero { padding: 1rem; border-radius: 14px; }
+    .cl-name { font-size: 1.32rem; }
+    .cl-avatar { width: 48px; height: 48px; border-radius: 14px; font-size: 1rem; }
+    .cl-stats { grid-template-columns: 1fr; gap: 0.55rem; }
+    .cl-details { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.7rem 1rem; }
+    .cl-tabs .nav-item { flex: 0 0 auto; }
+    .cl-tabs .nav-link { padding: 0.55rem 0.75rem !important; font-size: 0.85rem; }
+}
+
 /* Print: show only the active tab pane, hide the tab / pill chrome. */
 @media print {
     .nav-tabs,
     .nav-pills {
         display: none !important;
     }
+    .cl-hero {
+        background: #fff !important;
+        border: 1px solid #999 !important;
+        box-shadow: none !important;
+        padding: 0 0 0.5rem !important;
+        margin-bottom: 0.75rem !important;
+    }
+    .cl-hero-actions { display: none !important; }
+    .cl-avatar { display: none !important; }
+    .cl-name,
+    .cl-stat-value,
+    .cl-detail dd { color: #000 !important; }
+    .cl-chip,
+    .cl-stat,
+    .cl-detail dt,
+    .cl-detail-sub,
+    .cl-crumbs { color: #333 !important; border-color: #999 !important; background: #fff !important; }
     .tab-pane {
         display: none !important;
     }
