@@ -160,7 +160,6 @@ def test_admin_sidebar_categories_and_item_grouping(client):
         "Accounts",
         "Cash Flow",
         "Daily Reconciliation",
-        "Financial Tracker",
         "Pay Supplier",
         "Profit Reports",
     ]

@@ -709,9 +709,8 @@
                 {% set act_accounts = req_path.startswith('/accounts') and not act_pay_supplier %}
                 {% set act_cash_flow = req_path.startswith('/cash_flow') %}
                 {% set act_daily_recon = req_path.startswith('/daily_reconciliation') %}
-                {% set act_fin_tracker = req_path.startswith('/financial_tracker') %}
                 {% set act_profit = req_path.startswith('/profit_reports') or req_path.startswith('/financial_details') or req_path.startswith('/mixed_transactions') %}
-                {% set acc_open = (can_acc_payments and act_payments) or (can_acc_accounts and act_accounts) or (can_acc_cashflow and (act_cash_flow or act_daily_recon or act_fin_tracker)) or (can_acc_pay_supplier and act_pay_supplier) or (can_acc_profit and act_profit) %}
+                {% set acc_open = (can_acc_payments and act_payments) or (can_acc_accounts and act_accounts) or (can_acc_cashflow and (act_cash_flow or act_daily_recon)) or (can_acc_pay_supplier and act_pay_supplier) or (can_acc_profit and act_profit) %}
                 <div class="nav-group">
                     <button type="button"
                             class="nav-link nav-toggle-btn {{ 'is-open' if acc_open }} {{ 'has-active' if acc_open }}"
@@ -744,9 +743,6 @@
                             </a>
                             <a href="{{ url_for('daily_reconciliation') }}" class="nav-link {{ 'active' if act_daily_recon }}" onclick="closeSidebar()">
                                 <i class="bi bi-check2-circle"></i> Daily Reconciliation
-                            </a>
-                            <a href="{{ url_for('financial_tracker') }}" class="nav-link {{ 'active' if act_fin_tracker }}" onclick="closeSidebar()">
-                                <i class="bi bi-funnel"></i> Financial Tracker
                             </a>
                             {% endif %}
                             {% if can_acc_pay_supplier %}
