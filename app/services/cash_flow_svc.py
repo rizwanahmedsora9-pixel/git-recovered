@@ -87,7 +87,6 @@ _DB_HEALTH_DROP_MIN = C._DB_HEALTH_DROP_MIN
 _DB_HEALTH_MIN_BYTES = C._DB_HEALTH_MIN_BYTES
 
 def _cash_flow_net_between(start_date=None, end_date=None):
-    """Net cash movement for the same transaction sources shown in Cash Flow."""
     if end_date and start_date and start_date > end_date:
         return 0.0
 
@@ -99,69 +98,23 @@ def _cash_flow_net_between(start_date=None, end_date=None):
             filters.append(func.date(column) <= end_date.strftime('%Y-%m-%d'))
         return filters
 
-    cash_method_clauses = [
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash',
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash sale',
-    ]
-    payment_in = float(Payment.query.filter(
-        Payment.is_void == False,
-        or_(*cash_method_clauses),
-        *_date_filters(Payment.date_posted)
-    ).with_entities(func.sum(Payment.amount)).scalar() or 0)
+    cash_bank_ids = [a.id for a in _cf_company_accounts(active_only=False)]
+    if not cash_bank_ids:
+        return 0.0
 
-    sale_in = float(DirectSale.query.filter(
-        DirectSale.is_void == False,
-        or_(
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash sale',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash sale',
-        ),
-        DirectSale.paid_amount > 0,
-        *_date_filters(DirectSale.date_posted)
-    ).with_entities(func.sum(DirectSale.paid_amount)).scalar() or 0)
-
-    supplier_out = float(SupplierPayment.query.filter(
-        SupplierPayment.is_void == False,
-        *_date_filters(SupplierPayment.date_posted)
-    ).with_entities(func.sum(SupplierPayment.amount)).scalar() or 0)
-
-    account_in = 0.0
-    account_out = 0.0
-
-    account_txs = AccountTransaction.query.filter(
+    tx_in = float(AccountTransaction.query.filter(
         AccountTransaction.is_void == False,
-        AccountTransaction.transaction_type.in_(['Expense', 'Payment', 'Driver Payment', 'Receipt']),
+        AccountTransaction.to_account_id.in_(cash_bank_ids),
         *_date_filters(AccountTransaction.date_posted)
-    ).all()
-    account_cache = {}
-    for tx in account_txs:
-        amount = float(tx.amount or 0)
-        note_u = (tx.note or '').upper()
-        if any(marker in note_u for marker in (
-            '[SRC:BOOKING:',
-            '[SRC:DIRECTSALE:',
-            '[SRC:PAYMENT:',
-            '[SRC:SUPPLIERPAYMENT:',
-            '[SRC:CLIENTREFUND:',
-        )):
-            continue
-        if tx.transaction_type == 'Receipt' and tx.to_account_id is not None:
-            if tx.to_account_id not in account_cache:
-                account_cache[tx.to_account_id] = Account.query.get(tx.to_account_id)
-            acc = account_cache.get(tx.to_account_id)
-            if acc and (acc.category or '').lower() in ('cash', 'bank'):
-                account_in += amount
-            continue
-        if tx.transaction_type in ['Expense', 'Payment', 'Driver Payment'] and tx.from_account_id is not None:
-            if tx.from_account_id not in account_cache:
-                account_cache[tx.from_account_id] = Account.query.get(tx.from_account_id)
-            acc = account_cache.get(tx.from_account_id)
-            if acc and (acc.category or '').lower() in ('cash', 'bank'):
-                account_out += amount
+    ).with_entities(func.sum(AccountTransaction.amount)).scalar() or 0)
 
-    return payment_in + sale_in + account_in - supplier_out - account_out
+    tx_out = float(AccountTransaction.query.filter(
+        AccountTransaction.is_void == False,
+        AccountTransaction.from_account_id.in_(cash_bank_ids),
+        *_date_filters(AccountTransaction.date_posted)
+    ).with_entities(func.sum(AccountTransaction.amount)).scalar() or 0)
 
+    return tx_in - tx_out
 
 def _legacy_adjustments_total(start_date=None, end_date=None):
     query = CashFlowDifferenceAdjustment.query.filter(
@@ -175,7 +128,6 @@ def _legacy_adjustments_total(start_date=None, end_date=None):
 
 
 def _cash_flow_in_out_between(start_date, end_date):
-    """Cash-in and cash-out totals for the history page using cash-flow sources."""
     if end_date and start_date and start_date > end_date:
         return 0.0, 0.0
 
@@ -187,63 +139,25 @@ def _cash_flow_in_out_between(start_date, end_date):
             filters.append(func.date(column) <= end_date.strftime('%Y-%m-%d'))
         return filters
 
-    cash_method_clauses = [
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash',
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash sale',
-    ]
-    cash_in = float(Payment.query.filter(
-        Payment.is_void == False,
-        or_(*cash_method_clauses),
-        *_date_filters(Payment.date_posted)
-    ).with_entities(func.sum(Payment.amount)).scalar() or 0)
-    cash_in += float(DirectSale.query.filter(
-        DirectSale.is_void == False,
-        or_(
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash sale',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash sale',
-        ),
-        DirectSale.paid_amount > 0,
-        *_date_filters(DirectSale.date_posted)
-    ).with_entities(func.sum(DirectSale.paid_amount)).scalar() or 0)
-    cash_out = float(SupplierPayment.query.filter(
-        SupplierPayment.is_void == False,
-        *_date_filters(SupplierPayment.date_posted)
-    ).with_entities(func.sum(SupplierPayment.amount)).scalar() or 0)
+    cash_bank_ids = [a.id for a in _cf_company_accounts(active_only=False)]
+    if not cash_bank_ids:
+        return 0.0, 0.0
 
-    account_cache = {}
-    for tx in AccountTransaction.query.filter(
+    cash_in = float(AccountTransaction.query.filter(
         AccountTransaction.is_void == False,
-        AccountTransaction.transaction_type.in_(['Expense', 'Payment', 'Driver Payment', 'Receipt']),
+        AccountTransaction.to_account_id.in_(cash_bank_ids),
+        or_(AccountTransaction.from_account_id.notin_(cash_bank_ids), AccountTransaction.from_account_id.is_(None)),
         *_date_filters(AccountTransaction.date_posted)
-    ).all():
-        amount = float(tx.amount or 0)
-        note_u = (tx.note or '').upper()
-        if any(marker in note_u for marker in (
-            '[SRC:BOOKING:',
-            '[SRC:DIRECTSALE:',
-            '[SRC:PAYMENT:',
-            '[SRC:SUPPLIERPAYMENT:',
-            '[SRC:CLIENTREFUND:',
-        )):
-            continue
-        if tx.transaction_type == 'Receipt' and tx.to_account_id is not None:
-            if tx.to_account_id not in account_cache:
-                account_cache[tx.to_account_id] = Account.query.get(tx.to_account_id)
-            acc = account_cache.get(tx.to_account_id)
-            if acc and (acc.category or '').lower() in ('cash', 'bank'):
-                cash_in += amount
-            continue
-        if tx.transaction_type in ['Expense', 'Payment', 'Driver Payment'] and tx.from_account_id is not None:
-            if tx.from_account_id not in account_cache:
-                account_cache[tx.from_account_id] = Account.query.get(tx.from_account_id)
-            acc = account_cache.get(tx.from_account_id)
-            if acc and (acc.category or '').lower() in ('cash', 'bank'):
-                cash_out += amount
+    ).with_entities(func.sum(AccountTransaction.amount)).scalar() or 0)
+
+    cash_out = float(AccountTransaction.query.filter(
+        AccountTransaction.is_void == False,
+        AccountTransaction.from_account_id.in_(cash_bank_ids),
+        or_(AccountTransaction.to_account_id.notin_(cash_bank_ids), AccountTransaction.to_account_id.is_(None)),
+        *_date_filters(AccountTransaction.date_posted)
+    ).with_entities(func.sum(AccountTransaction.amount)).scalar() or 0)
 
     return cash_in, cash_out
-
 
 def _cash_accounts_opening_total(as_of_date=None):
     """Sum of opening balances of active company CASH accounts.
@@ -1211,189 +1125,118 @@ def _cf_is_mirror_tx(tx):
 
 
 def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voided=True):
-    """Collect manual + system cash-flow rows for a date window."""
     rows = []
     account_by_id = {a.id: a for a in Account.query.all()}
-
-    recorded = CashFlowEntry.query.filter(
-        func.date(CashFlowEntry.date_posted) >= from_date,
-        func.date(CashFlowEntry.date_posted) <= to_date,
-    )
-    if posted_after is not None:
-        recorded = recorded.filter(CashFlowEntry.date_posted > posted_after)
-    if not include_voided:
-        recorded = recorded.filter(CashFlowEntry.is_void == False)
-    for e in recorded.all():
-        acc = e.account or account_by_id.get(e.account_id)
-        dest = getattr(e, 'destination_account', None) or account_by_id.get(getattr(e, 'destination_account_id', None))
-        rows.append(_cf_row(
-            sort_dt=e.date_posted,
-            direction=e.direction,
-            amount=e.amount,
-            reference=(getattr(e, 'reference', None) or f'CF-{e.id}'),
-            description=e.description or '',
-            note=e.note or '',
-            category=e.category.name if e.category else '',
-            subcategory=e.subcategory.name if e.subcategory else '',
-            party_name=e.party_name or (e.party.name if e.party else ''),
-            party_type=e.party_type or (e.party.party_type if e.party else ''),
-            account_id=e.account_id,
-            account_name=acc.name if acc else '',
-            dest_account_id=getattr(e, 'destination_account_id', None),
-            dest_account_name=dest.name if dest else '',
-            source_type=getattr(e, 'source_type', None) or SRC_MANUAL,
-            origin='recorded',
-            origin_label='Recorded on Cash Flow',
-            created_by=e.created_by or '',
-            status='voided' if e.is_void else 'active',
-            entry_id=e.id,
-            tx_id=e.account_tx_id,
-        ))
-
-    cash_method_clauses = [
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash',
-        func.lower(func.trim(func.coalesce(Payment.method, ''))) == 'cash sale',
-    ]
-    pay_q = Payment.query.filter(
-        Payment.is_void == False,
-        or_(*cash_method_clauses),
-        func.date(Payment.date_posted) >= from_date,
-        func.date(Payment.date_posted) <= to_date,
-    )
-    if posted_after is not None:
-        pay_q = pay_q.filter(Payment.date_posted > posted_after)
-    for p in pay_q.all():
-        acc = account_by_id.get(getattr(p, 'payment_account_id', None))
-        amt = float(p.amount or 0)
-        direction = CF_DIR_OUT if amt < 0 else CF_DIR_IN
-        rows.append(_cf_row(
-            sort_dt=p.date_posted, direction=direction, amount=abs(amt),
-            reference=p.manual_bill_no or p.auto_bill_no or f'PAY-{p.id}',
-            description=f'Client Payment — {p.client_name or ""}',
-            note=p.note or '',
-            party_name=p.client_name or '', party_type='client',
-            account_id=getattr(p, 'payment_account_id', None),
-            account_name=acc.name if acc else '',
-            source_type=SRC_CLIENT_PAYMENT, origin='derived',
-            origin_label='From Accounts · Client Payments',
-            created_by=getattr(p, 'created_by', None) or '',
-        ))
-
-    sale_q = DirectSale.query.filter(
-        DirectSale.is_void == False,
-        or_(
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.category, ''))) == 'cash sale',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash',
-            func.lower(func.trim(func.coalesce(DirectSale.payment_method, ''))) == 'cash sale',
-        ),
-        DirectSale.paid_amount > 0,
-        func.date(DirectSale.date_posted) >= from_date,
-        func.date(DirectSale.date_posted) <= to_date,
-    )
-    if posted_after is not None:
-        sale_q = sale_q.filter(DirectSale.date_posted > posted_after)
-    for s in sale_q.all():
-        acc = account_by_id.get(getattr(s, 'payment_account_id', None))
-        rows.append(_cf_row(
-            sort_dt=s.date_posted, direction=CF_DIR_IN, amount=s.paid_amount,
-            reference=s.manual_bill_no or s.auto_bill_no or f'DS-{s.id}',
-            description=f'Cash Sale — {s.client_name or ""}',
-            note=s.note or '',
-            party_name=s.client_name or '', party_type='client',
-            account_id=getattr(s, 'payment_account_id', None),
-            account_name=acc.name if acc else '',
-            source_type=SRC_SALE, origin='derived',
-            origin_label='From Sales',
-            created_by=getattr(s, 'created_by', None) or '',
-        ))
-
-    sp_q = SupplierPayment.query.filter(
-        SupplierPayment.is_void == False,
-        func.date(SupplierPayment.date_posted) >= from_date,
-        func.date(SupplierPayment.date_posted) <= to_date,
-    )
-    if posted_after is not None:
-        sp_q = sp_q.filter(SupplierPayment.date_posted > posted_after)
-    for sp in sp_q.all():
-        supplier_name = sp.supplier.name if getattr(sp, 'supplier', None) else ''
-        acc = account_by_id.get(getattr(sp, 'payment_account_id', None))
-        rows.append(_cf_row(
-            sort_dt=sp.date_posted, direction=CF_DIR_OUT, amount=sp.amount,
-            reference=sp.manual_bill_no or sp.auto_bill_no or f'SUP-{sp.id}',
-            description=f'Supplier Payment — {supplier_name}',
-            note=sp.note or '',
-            party_name=supplier_name, party_type='supplier',
-            account_id=getattr(sp, 'payment_account_id', None),
-            account_name=acc.name if acc else '',
-            source_type=SRC_SUPPLIER_PAYMENT, origin='derived',
-            origin_label='From Accounts · Supplier Payments',
-            created_by=getattr(sp, 'created_by', None) or '',
-        ))
+    cash_bank_ids = {a.id for a in account_by_id.values() if (a.category or '').lower() in ('cash', 'bank')}
+    
+    if not cash_bank_ids:
+        return rows
 
     tx_q = AccountTransaction.query.filter(
-        AccountTransaction.is_void == False,
-        AccountTransaction.transaction_type.in_(['Expense', 'Payment', 'Driver Payment', 'Transfer', 'Receipt']),
         func.date(AccountTransaction.date_posted) >= from_date,
         func.date(AccountTransaction.date_posted) <= to_date,
+        or_(
+            AccountTransaction.from_account_id.in_(cash_bank_ids),
+            AccountTransaction.to_account_id.in_(cash_bank_ids)
+        )
     )
     if posted_after is not None:
         tx_q = tx_q.filter(AccountTransaction.date_posted > posted_after)
+    if not include_voided:
+        tx_q = tx_q.filter(AccountTransaction.is_void == False)
+
+    cf_entries = {e.account_tx_id: e for e in CashFlowEntry.query.filter(CashFlowEntry.account_tx_id.isnot(None)).all()}
+
     for tx in tx_q.all():
-        if _cf_is_mirror_tx(tx):
-            continue
         from_acc = account_by_id.get(tx.from_account_id)
         to_acc = account_by_id.get(tx.to_account_id)
-        if tx.transaction_type == 'Transfer':
-            from_ok = from_acc and (from_acc.category or '').lower() in ('cash', 'bank')
-            to_ok = to_acc and (to_acc.category or '').lower() in ('cash', 'bank')
-            if not (from_ok or to_ok):
-                continue
-            rows.append(_cf_row(
-                sort_dt=tx.date_posted, direction=CF_DIR_TRANSFER, amount=tx.amount,
-                reference=f'TX-{tx.id}',
-                description=tx.description or 'Account transfer',
-                note=tx.note or '',
-                account_id=tx.from_account_id,
-                account_name=from_acc.name if from_acc else '',
-                dest_account_id=tx.to_account_id,
-                dest_account_name=to_acc.name if to_acc else '',
-                source_type=SRC_TRANSFER, origin='derived',
-                origin_label='From Accounts · Transfer',
-                created_by=tx.created_by or '',
-                tx_id=tx.id,
-            ))
-            continue
-        if tx.transaction_type == 'Receipt' and to_acc and (to_acc.category or '').lower() in ('cash', 'bank'):
-            rows.append(_cf_row(
-                sort_dt=tx.date_posted, direction=CF_DIR_IN, amount=tx.amount,
-                reference=f'TX-{tx.id}',
-                description=tx.description or 'Cash received',
-                note=tx.note or '',
-                account_id=tx.to_account_id, account_name=to_acc.name,
-                source_type=SRC_ACCOUNT_RECEIPT, origin='derived',
-                origin_label='From Accounts · Other receive',
-                created_by=tx.created_by or '',
-                tx_id=tx.id,
-            ))
-            continue
-        if tx.transaction_type in ('Expense', 'Payment', 'Driver Payment') and from_acc and (from_acc.category or '').lower() in ('cash', 'bank'):
-            is_driver = tx.transaction_type == 'Driver Payment'
-            rows.append(_cf_row(
-                sort_dt=tx.date_posted, direction=CF_DIR_OUT, amount=tx.amount,
-                reference=f'TX-{tx.id}',
-                description=tx.description or ('Driver service payment' if is_driver else 'Expense'),
-                note=tx.note or '',
-                party_type=('delivery_person' if is_driver else ''),
-                account_id=tx.from_account_id, account_name=from_acc.name,
-                source_type=SRC_DRIVER_PAYMENT if is_driver else SRC_ACCOUNT_EXPENSE,
-                origin='derived',
-                origin_label=('From Accounts · Driver Services' if is_driver else 'From Accounts · Expense'),
-                created_by=tx.created_by or '',
-                tx_id=tx.id,
-            ))
-    return rows
+        
+        is_from_cash = tx.from_account_id in cash_bank_ids
+        is_to_cash = tx.to_account_id in cash_bank_ids
 
+        if is_from_cash and is_to_cash:
+            direction = CF_DIR_TRANSFER
+            account_id = tx.from_account_id
+            account_name = from_acc.name if from_acc else ''
+            dest_account_id = tx.to_account_id
+            dest_account_name = to_acc.name if to_acc else ''
+            cash_in = 0.0
+            cash_out = 0.0
+            transfer_amount = float(tx.amount or 0)
+        elif is_to_cash:
+            direction = CF_DIR_IN
+            account_id = tx.to_account_id
+            account_name = to_acc.name if to_acc else ''
+            dest_account_id = None
+            dest_account_name = ''
+            cash_in = float(tx.amount or 0)
+            cash_out = 0.0
+            transfer_amount = 0.0
+        else:
+            direction = CF_DIR_OUT
+            account_id = tx.from_account_id
+            account_name = from_acc.name if from_acc else ''
+            dest_account_id = None
+            dest_account_name = ''
+            cash_in = 0.0
+            cash_out = float(tx.amount or 0)
+            transfer_amount = 0.0
+
+        e = cf_entries.get(tx.id)
+        if e:
+            category = e.category.name if e.category else ''
+            subcategory = e.subcategory.name if e.subcategory else ''
+            party_name = e.party_name or (e.party.name if e.party else '')
+            party_type = e.party_type or (e.party.party_type if e.party else '')
+            description = e.description or tx.description or ''
+            note = e.note or tx.note or ''
+            reference = getattr(e, 'reference', None) or f'TX-{tx.id}'
+            origin = 'recorded'
+            origin_label = 'Recorded on Cash Flow'
+            source_type = getattr(e, 'source_type', None) or SRC_MANUAL
+        else:
+            category = ''
+            subcategory = ''
+            party_name = ''
+            party_type = ''
+            description = tx.description or tx.transaction_type or ''
+            note = tx.note or ''
+            reference = f'TX-{tx.id}'
+            origin = 'derived'
+            origin_label = f'From Accounts · {tx.source_type or tx.transaction_type}'
+            source_type = tx.source_type or 'SYSTEM'
+
+        rows.append({
+            'date': tx.date_posted.date() if hasattr(tx.date_posted, 'date') else tx.date_posted,
+            'sort_dt': tx.date_posted,
+            'type': direction,
+            'tx_type_label': _cf_type_label(direction),
+            'cash_in': cash_in,
+            'cash_out': cash_out,
+            'transfer_amount': transfer_amount,
+            'amount': float(tx.amount or 0),
+            'account_id': account_id,
+            'account_name': account_name,
+            'account_to_id': dest_account_id,
+            'account_to_name': dest_account_name,
+            'account_display': f"{account_name} → {dest_account_name}" if direction == CF_DIR_TRANSFER else account_name,
+            'category': category,
+            'subcategory': subcategory,
+            'party_name': party_name,
+            'party_type': party_type,
+            'description': description,
+            'note': note,
+            'reference': reference,
+            'source': 'MANUAL' if origin == 'recorded' else 'SYSTEM',
+            'source_type': source_type,
+            'origin': origin,
+            'origin_label': origin_label,
+            'created_by': tx.created_by or getattr(e, 'created_by', '') if e else '',
+            'status': 'voided' if tx.is_void else 'active',
+            'entry_id': e.id if e else None,
+            'tx_id': tx.id,
+        })
+    return rows
 
 def _cf_sort_key(row):
     d = row.get('sort_dt') or row.get('date')

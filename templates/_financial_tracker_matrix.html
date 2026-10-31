@@ -214,26 +214,7 @@
               {% if r.entry_id %}
               <button type="button" class="btn btn-xs btn-light border cf-view-btn py-0 px-2" data-entry-id="{{ r.entry_id }}">View</button>
               {% endif %}
-              {% if r.entry_id and r.source == 'MANUAL' %}
-                {% if r.status != 'voided' %}
-                <button type="button" class="btn btn-xs btn-outline-primary cf-edit-btn py-0 px-2" data-entry-id="{{ r.entry_id }}">Edit</button>
-                <form method="POST" action="{{ url_for('cash_flow') }}" class="d-inline" onsubmit="return confirm('Delete/void this transaction and reverse the account balance effect? Full audit history is retained.');">
-                  <input type="hidden" name="action" value="void_entry">
-                  <input type="hidden" name="entry_id" value="{{ r.entry_id }}">
-                  <input type="hidden" name="from_date" value="{{ ft.from_d.strftime('%Y-%m-%d') }}">
-                  <input type="hidden" name="to_date" value="{{ ft.to_d.strftime('%Y-%m-%d') }}">
-                  <input type="text" name="void_reason" class="form-control form-control-sm d-inline-block py-0 px-1" style="width:90px;font-size:0.75rem;" placeholder="Reason">
-                  <button class="btn btn-xs btn-outline-danger py-0 px-2" type="submit">Delete</button>
-                </form>
-                {% else %}
-                <form method="POST" action="{{ url_for('cash_flow') }}" class="d-inline">
-                  <input type="hidden" name="action" value="restore_entry">
-                  <input type="hidden" name="entry_id" value="{{ r.entry_id }}">
-                  <input type="hidden" name="from_date" value="{{ ft.from_d.strftime('%Y-%m-%d') }}">
-                  <input type="hidden" name="to_date" value="{{ ft.to_d.strftime('%Y-%m-%d') }}">
-                  <button class="btn btn-xs btn-outline-success py-0 px-2" type="submit">Restore</button>
-                </form>
-                {% endif %}
+              
               {% endif %}
             </td>
             {% endif %}
