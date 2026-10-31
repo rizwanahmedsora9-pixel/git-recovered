@@ -346,6 +346,46 @@ class CashDayLock(db.Model):
     )
 
 
+class CashDayShiftClose(db.Model):
+    """Immutable audit snapshot for a shift checkpoint on a financial day.
+
+    A shift close is an auditable checkpoint; the day lock remains the final
+    daily close and the authority for next-day opening carry-forward.
+    """
+    __tablename__ = 'cash_day_shift_close'
+    id = db.Column(db.Integer, primary_key=True)
+    close_date = db.Column(db.Date, nullable=False, index=True)
+    shift_name = db.Column(db.String(80), nullable=False)
+    closed_by = db.Column(db.String(80))
+    closed_at = db.Column(db.DateTime, default=pk_model_now, nullable=False, index=True)
+    note = db.Column(db.String(500))
+    total_expected = db.Column(db.Float, default=0)
+    total_counted = db.Column(db.Float, default=0)
+    difference = db.Column(db.Float, default=0)
+    positions = db.relationship(
+        'CashDayShiftClosePosition', backref='shift_close',
+        cascade='all, delete-orphan', order_by='CashDayShiftClosePosition.id',
+    )
+
+
+class CashDayShiftClosePosition(db.Model):
+    """Per-account figures captured by an immutable shift-close checkpoint."""
+    __tablename__ = 'cash_day_shift_close_position'
+    id = db.Column(db.Integer, primary_key=True)
+    shift_close_id = db.Column(
+        db.Integer, db.ForeignKey('cash_day_shift_close.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    account_id = db.Column(db.Integer, nullable=False, index=True)
+    account_name = db.Column(db.String(100))
+    opening = db.Column(db.Float, default=0)
+    amount_in = db.Column(db.Float, default=0)
+    amount_out = db.Column(db.Float, default=0)
+    expected_closing = db.Column(db.Float, default=0)
+    counted = db.Column(db.Float, nullable=False)
+    difference = db.Column(db.Float, default=0)
+
+
 class CashDayAccountPosition(db.Model):
     """Per-account position for a financial day on the reconciliation page.
 

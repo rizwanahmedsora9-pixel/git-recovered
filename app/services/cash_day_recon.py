@@ -28,6 +28,7 @@ from sqlalchemy import case, func, or_
 
 from models import (
     db, Account, AccountTransaction, CashDayLock, CashDayAccountPosition,
+    CashDayShiftClose, CashDayShiftClosePosition,
 )
 from utils.money import from_minor, to_minor
 from app.services.time_money import _money_round, pk_now, pk_today
@@ -437,6 +438,110 @@ def account_positions_for_date(day) -> list:
 
 def get_day_lock(day):
     return CashDayLock.query.filter_by(lock_date=_to_date(day)).first()
+
+
+def shift_closes_for_date(day):
+    """Return the newest shift-close audit snapshots for one financial day."""
+    return CashDayShiftClose.query.filter_by(close_date=_to_date(day)).order_by(
+        CashDayShiftClose.closed_at.desc(), CashDayShiftClose.id.desc()
+    ).all()
+
+
+def close_shift(day, shift_name, actor=None, note=""):
+    """Record an immutable, shift-period reconciliation checkpoint.
+
+    The first shift starts from the day's normal opening. Each later shift
+    starts from the previous checkpoint's counted close, then applies ledger
+    movements posted since that handover. A shift close stays distinct from
+    the final day lock, which freezes the day's final counts and carries them
+    forward as the next day's opening.
+    """
+    day = _to_date(day)
+    name = str(shift_name or "").strip()
+    if not name:
+        raise ValueError("Enter a shift name (for example Morning or Evening).")
+    if len(name) > 80:
+        raise ValueError("Shift name must be 80 characters or fewer.")
+    if get_day_lock(day) is not None:
+        raise ValueError(f"{day:%Y-%m-%d} is day-locked. Unlock the day before adding a shift close.")
+
+    positions = account_positions_for_date(day)
+    if not positions:
+        raise ValueError("There are no active company accounts to close.")
+    uncounted = [p["account_name"] for p in positions if p["counted"] is None]
+    if uncounted:
+        preview = ", ".join(uncounted[:3])
+        if len(uncounted) > 3:
+            preview += f" and {len(uncounted) - 3} more"
+        raise ValueError(f"Count every account before closing this shift. Still missing: {preview}.")
+
+    actor_name = getattr(actor, "username", None) or actor
+    closed_at = pk_now()
+    previous_close = shift_closes_for_date(day)
+    previous_close = previous_close[0] if previous_close else None
+    previous_positions = {
+        p.account_id: p for p in (previous_close.positions if previous_close else [])
+    }
+    day_start = datetime.combine(day, time.min) - timedelta(microseconds=1)
+    snapshots = []
+    for p in positions:
+        previous = previous_positions.get(p["account_id"])
+        account = db.session.get(Account, p["account_id"])
+        account_created = _naive_dt(getattr(account, "created_at", None))
+        prior_close_at = _naive_dt(getattr(previous_close, "closed_at", None))
+        previous_belongs = (
+            previous is not None
+            and previous.account_name == p["account_name"]
+            and not (account_created and prior_close_at and account_created > prior_close_at)
+        )
+        # Do not carry a prior cashier's count into a newly-created account
+        # that happens to reuse its numeric id (even if its name is the same).
+        if previous_belongs:
+            opening = _money_round(previous.counted)
+            movement_start = previous_close.closed_at
+        else:
+            opening = _money_round(p["opening"])
+            movement_start = day_start
+        incoming_minor, outgoing_minor = _movement_minor(
+            p["account_id"], after=movement_start, through=closed_at
+        )
+        amount_in = _money_round(from_minor(incoming_minor))
+        amount_out = _money_round(from_minor(outgoing_minor))
+        expected = _money_round(opening + amount_in - amount_out)
+        snapshots.append({
+            **p,
+            "shift_opening": opening,
+            "shift_in": amount_in,
+            "shift_out": amount_out,
+            "shift_expected": expected,
+        })
+
+    total_expected = _money_round(sum(p["shift_expected"] for p in snapshots))
+    total_counted = _money_round(sum(p["counted"] for p in snapshots))
+    record = CashDayShiftClose(
+        close_date=day,
+        shift_name=name,
+        closed_by=str(actor_name or "")[:80] or None,
+        closed_at=closed_at,
+        note=str(note or "").strip()[:500] or None,
+        total_expected=total_expected,
+        total_counted=total_counted,
+        difference=_money_round(total_counted - total_expected),
+    )
+    for p in snapshots:
+        record.positions.append(CashDayShiftClosePosition(
+            account_id=p["account_id"],
+            account_name=p["account_name"],
+            opening=p["shift_opening"],
+            amount_in=p["shift_in"],
+            amount_out=p["shift_out"],
+            expected_closing=p["shift_expected"],
+            counted=p["counted"],
+            difference=_money_round(p["counted"] - p["shift_expected"]),
+        ))
+    db.session.add(record)
+    db.session.commit()
+    return record
 
 
 def save_count(day, account_id, counted, actor=None):
