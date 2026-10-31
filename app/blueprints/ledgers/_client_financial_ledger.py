@@ -1,80 +1,165 @@
 """client — split from ledgers.py."""
 from ._common import *  # noqa
 
-# Category bucket used for rent/service lines (services have no Material
-# Category of their own — they are charges, not stock).
+# Category bucket used for a rent / service charge that has no master Material
+# row of its own (services are charges, not stock, so they carry no category).
+# A rent material that still lives in the Material master keeps its own master
+# category (e.g. "RENT") — the report must never invent a category for it.
 RENTAL_CATEGORY = "Rental / Services"
 UNCATEGORIZED = "Uncategorized"
 
 
-def build_client_material_analysis(client_name_norm, materials=None, services=None):
+def _ma_money(value):
+    """Round a money figure to paisa — the precision every ledger screen shows."""
+    return round(float(value or 0), 2)
+
+
+def _ma_qty(value):
+    """Round a quantity to three decimals (bags / pieces / days)."""
+    return round(float(value or 0), 3)
+
+
+def _ma_norm(value):
+    """Identity key for a free-text bill line.
+
+    Bill lines store material names as free text, so the same material appears
+    as ``RENT STEEL`` on one bill and ``RENT-STEEL`` on the next.  The master
+    lookups already normalise this way (``app.services.lookups``); reusing the
+    same rule keeps one material from being reported twice.
+    """
+    return re.sub(r'[^a-z0-9]+', '', (value or '').strip().lower())
+
+
+def build_client_material_analysis(client_name_norm, materials=None, services=None,
+                                   client_code=None):
     """Material-wise and category-wise analysis of a client's billed ledger lines.
 
     Built strictly from the client's own ledger data: the line items of every
-    non-void Booking and DirectSale belonging to the client.  No other client's
-    rows are ever considered.
+    non-void Booking and DirectSale belonging to that client.  No other
+    client's rows are ever considered, and a DirectSale is matched by client
+    code as well as by the name snapshot so a renamed client cannot lose its
+    history.
 
     Returns ``(material_rows, category_rows, material_grand, category_grand)``:
 
-    * ``material_rows``  — one row per material/service name: material, code,
-      category, qty, amount, rent.
-    * ``category_rows``  — one row per category: category, qty, payment, rent.
-    * ``material_grand`` / ``category_grand`` — totals dicts.
+    * ``material_rows``  — one row per material/service: material, code, unit,
+      category, qty, amount, rent, lines, is_rental.
+    * ``category_rows``  — one row per category: category, materials, qty,
+      payment, rent, share.
+    * ``material_grand`` / ``category_grand`` — totals dicts (qty, amount or
+      payment, rent, materials, categories, lines).
 
-    Rental charges are recognised with the shared ``is_service_name`` rule (the
-    same rule the sale form, ``rent_item_revenue`` and the P&L use), so rent
-    lines are always counted the same way everywhere in the application.
+    Line value is ``qty × rate − line discount`` (the net billed amount, never
+    below zero), exactly what the sale form posts.  A line is a rental charge
+    when the shared ``is_service_name`` rule says so — the same rule the sale
+    form, ``rent_item_revenue`` and the P&L use — so rent is counted the same
+    way everywhere in the application.
     """
     from app.services.lookups import is_service_name
 
-    # --- Name indexes built once (Material master + Service master) ----------
-    mat_by_name = {}
+    # --- Master indexes -----------------------------------------------------
+    # Two lookups are kept per master: an exact (case/space-insensitive) name
+    # or code match, then the normalised key the rest of the app resolves
+    # names with.  Records are ordered by id so a duplicated master name always
+    # resolves the same way on every request.
     if materials is None:
         materials = Material.query.all()
-    for m in materials:
-        for key in (m.name, m.code):
-            if key:
-                mat_by_name.setdefault(str(key).strip().lower(), m)
-
-    svc_by_name = {}
     if services is None:
         services = Service.query.all()
-    for s in services:
-        for key in (s.name, s.code):
-            if key:
-                svc_by_name.setdefault(str(key).strip().lower(), s)
 
-    def resolve(name):
-        """Return ``(master_record, category_name)`` for a bill line name."""
-        raw = (name or '').strip()
-        if not raw:
-            return None, UNCATEGORIZED
-        if is_service_name(raw):
-            return svc_by_name.get(raw.lower()), RENTAL_CATEGORY
-        mat = mat_by_name.get(raw.lower())
-        if mat is None:
-            # Historical/renamed material not in the current master.
-            mat = Material.query.filter(
-                or_(Material.name.ilike(raw), Material.code.ilike(raw))
-            ).first()
-            if mat is not None:
-                mat_by_name.setdefault(raw.lower(), mat)
-        if mat is None:
-            return None, UNCATEGORIZED
-        return mat, (mat.category.name if mat.category else UNCATEGORIZED)
+    def _index(records):
+        exact, norm = {}, {}
+        for rec in sorted(records, key=lambda r: (r.id or 0)):
+            for value in (getattr(rec, 'name', None), getattr(rec, 'code', None)):
+                if not value:
+                    continue
+                exact.setdefault(str(value).strip().lower(), rec)
+                norm.setdefault(_ma_norm(value), rec)
+        return exact, norm
 
-    # --- Collect billed lines: bookings + direct sales (this client only) ----
+    mat_exact, mat_norm = _index(materials)
+    svc_exact, svc_norm = _index(services)
+
+    def _lookup(raw_name):
+        """Return ``(kind, record)`` for a bill-line name (service first)."""
+        text = (raw_name or '').strip()
+        if not text:
+            return None, None
+        low = text.lower()
+        key = _ma_norm(text)
+        svc = svc_exact.get(low) or svc_norm.get(key)
+        if svc is not None:
+            return 'service', svc
+        mat = mat_exact.get(low) or mat_norm.get(key)
+        if mat is not None:
+            return 'material', mat
+        return None, None
+
+    def _describe(raw_name):
+        """Report attributes + aggregation key for one free-text bill line."""
+        kind, rec = _lookup(raw_name)
+        if kind == 'service':
+            return {
+                'key': 'service:%s' % (rec.id,),
+                'name': rec.name or raw_name,
+                'category': RENTAL_CATEGORY,
+                'code': rec.code or '',
+                'unit': getattr(rec, 'unit', '') or '',
+                'is_rental': True,
+            }
+        if kind == 'material':
+            category = (rec.category.name if rec.category and rec.category.name
+                        else UNCATEGORIZED)
+            return {
+                'key': 'material:%s' % (rec.id,),
+                'name': rec.name or raw_name,
+                'category': category,
+                'code': rec.code or '',
+                'unit': rec.unit or '',
+                'is_rental': is_service_name(rec.name) or is_service_name(raw_name),
+            }
+        # Historical / renamed item that is no longer in either master.
+        rental = is_service_name(raw_name)
+        return {
+            'key': 'name:' + (_ma_norm(raw_name) or raw_name.strip().lower()),
+            'name': raw_name.strip(),
+            'category': RENTAL_CATEGORY if rental else UNCATEGORIZED,
+            'code': '',
+            'unit': '',
+            'is_rental': rental,
+        }
+
+    # --- Collect this client's billed lines (bookings + direct sales) -------
     agg = {}
 
-    def _add_line(name, qty, rate, discount):
-        if not (name or '').strip():
+    def _add_line(raw_name, qty, rate, discount):
+        name = (raw_name or '').strip()
+        if not name:
             return
+        info = _describe(name)
+        is_rental = info['is_rental']
         qty = float(qty or 0)
-        amount = max(0.0, round(qty * float(rate or 0) - float(discount or 0), 2))
-        entry = agg.setdefault(name.strip(), {'qty': 0.0, 'amount': 0.0, 'rent': 0.0})
+        amount = max(0.0, _ma_money(qty * float(rate or 0) - float(discount or 0)))
+        entry = agg.get(info['key'])
+        if entry is None:
+            entry = {
+                'name': info['name'],
+                'category': info['category'],
+                'code': info['code'],
+                'unit': info['unit'],
+                'is_rental': is_rental,
+                'qty': 0.0,
+                'amount': 0.0,
+                'rent': 0.0,
+                'lines': 0,
+            }
+            agg[info['key']] = entry
+        elif is_rental:
+            entry['is_rental'] = True
         entry['qty'] += qty
         entry['amount'] += amount
-        if is_service_name(name):
+        entry['lines'] += 1
+        if is_rental:
             entry['rent'] += amount
 
     bookings = Booking.query.filter(
@@ -85,48 +170,88 @@ def build_client_material_analysis(client_name_norm, materials=None, services=No
         for item in b.items:
             _add_line(item.material_name, item.qty, item.price_at_time, item.discount)
 
+    sale_filter = [func.lower(func.trim(DirectSale.client_name)) == client_name_norm]
+    if client_code:
+        sale_filter.append(
+            func.upper(func.trim(DirectSale.client_code)) == client_code.strip().upper()
+        )
     direct_sales = DirectSale.query.filter(
-        func.lower(func.trim(DirectSale.client_name)) == client_name_norm,
+        or_(*sale_filter),
         DirectSale.is_void == False,  # noqa: E712
     ).all()
     for s in direct_sales:
         for item in s.items:
             _add_line(item.product_name, item.qty, item.price_at_time, item.discount)
 
-    # --- Material-wise rows ---------------------------------------------------
+    # --- Material-wise rows (one row per master material / service) ---------
     material_rows = []
-    for name, entry in agg.items():
-        mat, category = resolve(name)
+    for entry in agg.values():
         material_rows.append({
-            'material': name,
-            'code': (mat.code if mat and mat.code else ''),
-            'category': category,
-            'qty': entry['qty'],
-            'amount': entry['amount'],
-            'rent': entry['rent'],
+            'material': entry['name'],
+            'code': entry['code'],
+            'unit': entry['unit'],
+            'category': entry['category'],
+            'qty': _ma_qty(entry['qty']),
+            'amount': _ma_money(entry['amount']),
+            'rent': _ma_money(entry['rent']),
+            'lines': entry['lines'],
+            'is_rental': entry['is_rental'],
         })
-    material_rows.sort(key=lambda r: (r['category'], r['material'].lower()))
 
-    # --- Category-wise rows ---------------------------------------------------
+    def _category_sort(category):
+        # Uncategorized always last; everything else alphabetical.
+        return (category == UNCATEGORIZED, (category or '').lower())
+
+    material_rows.sort(key=lambda r: (_category_sort(r['category']),
+                                      (r['material'] or '').lower()))
+
+    # --- Category-wise rows (subtotals of the material rows) ----------------
     cat_map = {}
     for row in material_rows:
-        e = cat_map.setdefault(
-            row['category'], {'category': row['category'], 'qty': 0.0, 'payment': 0.0, 'rent': 0.0}
-        )
-        e['qty'] += row['qty']
-        e['payment'] += row['amount']
-        e['rent'] += row['rent']
-    category_rows = sorted(cat_map.values(), key=lambda r: r['category'])
+        entry = cat_map.setdefault(row['category'], {
+            'category': row['category'],
+            'materials': 0,
+            'qty': 0.0,
+            'payment': 0.0,
+            'rent': 0.0,
+            'lines': 0,
+        })
+        entry['materials'] += 1
+        entry['qty'] += row['qty']
+        entry['payment'] += row['amount']
+        entry['rent'] += row['rent']
+        entry['lines'] += row['lines']
 
-    def _grand(rows, keys):
-        total = {k: 0.0 for k in keys}
-        for r in rows:
-            for k in keys:
-                total[k] += float(r.get(k, 0) or 0)
-        return total
+    category_rows = []
+    for entry in cat_map.values():
+        entry['qty'] = _ma_qty(entry['qty'])
+        entry['payment'] = _ma_money(entry['payment'])
+        entry['rent'] = _ma_money(entry['rent'])
+        category_rows.append(entry)
+    category_rows.sort(key=lambda r: _category_sort(r['category']))
 
-    material_grand = _grand(material_rows, ('qty', 'amount', 'rent'))
-    category_grand = _grand(category_rows, ('qty', 'payment', 'rent'))
+    # --- Grand totals (always the sum of the rows above, never a re-query) --
+    material_grand = {
+        'qty': _ma_qty(sum(r['qty'] for r in material_rows)),
+        'amount': _ma_money(sum(r['amount'] for r in material_rows)),
+        'rent': _ma_money(sum(r['rent'] for r in material_rows)),
+        'materials': len(material_rows),
+        'categories': len(category_rows),
+        'lines': sum(r['lines'] for r in material_rows),
+    }
+    category_grand = {
+        'qty': _ma_qty(sum(r['qty'] for r in category_rows)),
+        'payment': _ma_money(sum(r['payment'] for r in category_rows)),
+        'rent': _ma_money(sum(r['rent'] for r in category_rows)),
+        'materials': sum(r['materials'] for r in category_rows),
+        'categories': len(category_rows),
+        'lines': material_grand['lines'],
+    }
+
+    # Share of the billed value (percentage) — presentation only.
+    billed = category_grand['payment']
+    for row in category_rows:
+        row['share'] = round((row['payment'] / billed * 100.0), 1) if billed else 0.0
 
     return material_rows, category_rows, material_grand, category_grand
 
@@ -789,7 +914,8 @@ def financial_ledger(client_id):
 
     # Material Analysis tab data (client's billed ledger lines only).
     material_rows, category_rows, material_grand, category_grand = build_client_material_analysis(
-        client_name_norm, materials=materials, services=services
+        client_name_norm, materials=materials, services=services,
+        client_code=client.code,
     )
 
     # Build transaction objects for modals
