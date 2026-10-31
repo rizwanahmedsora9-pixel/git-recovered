@@ -373,8 +373,7 @@
             #sidebar,
             .sidebar-overlay,
             #sidebarOverlay,
-            .loading-overlay,
-            #loadingOverlay,
+            #topProgressBar,
             .modal,
             .modal-backdrop {
                 display: none !important;
@@ -401,26 +400,24 @@
             }
         }
 
-        /* Loading Overlay */
-        .loading-overlay {
+        /* Top progress bar — replaces the old full-screen loading curtain.
+           A thin red line pinned to the very top of the page (right under the
+           browser URL bar) that sweeps across during navigation and data
+           requests.  pointer-events: none means it never blocks the page. */
+        .top-progress-bar {
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(15, 23, 42, 0.95);
-            z-index: 9999;
-            display: none;
-            justify-content: center;
-            align-items: center;
-            flex-direction: column;
+            top: 0;
+            left: 0;
+            height: 3px;
+            width: 0;
+            background: #ff0000;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.55);
+            z-index: 999999;
+            opacity: 0;
+            pointer-events: none;
+            transition: width 0.15s ease-out, opacity 0.3s ease-out;
         }
-        .loading-overlay.show { display: flex; }
-        .loading-spinner {
-            width: 50px; height: 50px;
-            border: 4px solid #334155;
-            border-top: 4px solid var(--accent);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .top-progress-bar.is-active { opacity: 1; }
 
         /* ---- Top-level transaction dialogs -----------------------------------
            The sale sheet and other in-page Bootstrap modals sit at the default
@@ -447,13 +444,7 @@
 </head>
 <body>
 
-<div class="loading-overlay" id="loadingOverlay">
-    <div class="loading-spinner"></div>
-    <div class="loading-text mt-3 text-warning fw-bold">Processing...</div>
-    <button type="button" id="loadingDismissBtn" class="btn btn-outline-warning btn-sm mt-3 fw-bold" style="display:none;">
-        Still waiting? Tap to close
-    </button>
-</div>
+<div class="top-progress-bar" id="topProgressBar" role="progressbar" aria-label="Page progress"></div>
 
 <div class="modal fade" id="taskProgressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
@@ -975,7 +966,6 @@
     const sidebarNav = document.querySelector('.sidebar-nav-container');
     const overlay = document.getElementById('sidebarOverlay');
     const toggle = document.getElementById('sidebarToggle');
-    const loadingOverlay = document.getElementById('loadingOverlay');
     const taskProgressModalEl = document.getElementById('taskProgressModal');
     const taskResultModalEl = document.getElementById('taskResultModal');
     const taskProgressBar = document.getElementById('taskProgressBar');
@@ -1100,17 +1090,30 @@ function toggleNavGroup(groupId, btn) {
 <script>
     // Global Utilities
     let loadingShownAt = 0;
+    let loadingActive = false;
     let loadingWatchTimer = null;
+    let topProgressTimer = null;
+    let topProgressToken = 0;
+    let topProgressValue = 0;
     let __formSubmitting = false;
     function showLoading() {
-        if (!loadingOverlay) return;
-        loadingOverlay.classList.add('show');
+        const bar = document.getElementById('topProgressBar');
+        if (!bar) return;
+        loadingActive = true;
         loadingShownAt = Date.now();
-        const dismiss = document.getElementById('loadingDismissBtn');
-        if (dismiss) {
-            dismiss.style.display = 'none';
-            setTimeout(() => { if (loadingOverlay.classList.contains('show')) dismiss.style.display = 'inline-block'; }, 8000);
-        }
+        topProgressToken++;
+        bar.classList.add('is-active');
+        // Snappy start, then a slow trickle so the bar keeps moving while a
+        // long request is still in flight.
+        topProgressValue = 12;
+        bar.style.width = '12%';
+        if (topProgressTimer) clearInterval(topProgressTimer);
+        topProgressTimer = setInterval(function () {
+            if (topProgressValue >= 90) return;
+            topProgressValue += 8 + Math.random() * 6;
+            if (topProgressValue > 90) topProgressValue = 90;
+            bar.style.width = Math.floor(topProgressValue) + '%';
+        }, 250);
         if (loadingWatchTimer) clearTimeout(loadingWatchTimer);
         // Reduced from 120s to 30s — users should not wait 2 minutes for a stuck overlay
         loadingWatchTimer = setTimeout(hideLoading, 30000);
@@ -1130,38 +1133,46 @@ function toggleNavGroup(groupId, btn) {
         document.querySelectorAll('form').forEach(function (f) { lockForm(f, false); });
     }
     function hideLoading() {
-        if (loadingOverlay) loadingOverlay.classList.remove('show');
+        if (topProgressTimer) { clearInterval(topProgressTimer); topProgressTimer = null; }
+        loadingActive = false;
         loadingShownAt = 0;
         __formSubmitting = false;
         unlockAllForms();
-        const dismiss = document.getElementById('loadingDismissBtn');
-        if (dismiss) dismiss.style.display = 'none';
         if (loadingWatchTimer) { clearTimeout(loadingWatchTimer); loadingWatchTimer = null; }
+        const bar = document.getElementById('topProgressBar');
+        if (!bar) return;
+        // Finish the sweep instantly, then fade the line away — fast and
+        // non-blocking, unlike the old full-screen curtain.
+        const token = ++topProgressToken;
+        topProgressValue = 100;
+        bar.style.width = '100%';
+        setTimeout(function () {
+            if (token !== topProgressToken) return;
+            bar.classList.remove('is-active');
+            setTimeout(function () {
+                if (token !== topProgressToken) return;
+                bar.style.width = '0%';
+            }, 350);
+        }, 120);
     }
     // Catch unhandled errors and release every overlay so the page never stays locked.
     window.addEventListener('error', function (e) {
-        if (loadingOverlay && loadingOverlay.classList.contains('show')) {
-            console.warn('Uncaught error while loading overlay was active — hiding overlay.', e.message || e);
+        if (loadingActive) {
+            console.warn('Uncaught error while progress was active — clearing it.', e.message || e);
             hideLoading();
         }
         if (typeof closeTaskProgressNow === 'function') closeTaskProgressNow();
     });
     // Also catch unhandled promise rejections.
     window.addEventListener('unhandledrejection', function (e) {
-        if (loadingOverlay && loadingOverlay.classList.contains('show')) {
-            console.warn('Unhandled promise rejection while loading overlay was active — hiding overlay.', e.reason || e);
+        if (loadingActive) {
+            console.warn('Unhandled promise rejection while progress was active — clearing it.', e.reason || e);
             hideLoading();
         }
         if (typeof closeTaskProgressNow === 'function') closeTaskProgressNow();
     });
     window.showLoading = showLoading;
     window.hideLoading = hideLoading;
-    document.addEventListener('click', function (e) {
-        if (e.target && e.target.id === 'loadingDismissBtn') hideLoading();
-    });
-    document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') hideLoading();
-    });
     function escapeReportHtml(value) {
         // NOTE: this function runs inside a <script> element, so the entity
         // strings below must never appear literally in the source.  Browsers
