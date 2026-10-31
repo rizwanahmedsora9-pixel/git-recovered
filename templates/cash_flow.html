@@ -125,10 +125,7 @@
       <span class="cf-tab-ico"><i class="bi bi-graph-up"></i></span>
       <span><span class="cf-tab-title">Financial Details</span><span class="cf-tab-sub">Balances &amp; totals</span></span>
     </button>
-    <button type="button" class="cf-tab" data-cf-tab="transaction" role="tab" aria-selected="false">
-      <span class="cf-tab-ico"><i class="bi bi-plus-circle"></i></span>
-      <span><span class="cf-tab-title">New Transaction</span><span class="cf-tab-sub">Receive · Spend · Transfer</span></span>
-    </button>
+    
     <button type="button" class="cf-tab" data-cf-tab="transactions" role="tab" aria-selected="false">
       <span class="cf-tab-ico"><i class="bi bi-table"></i></span>
       <span><span class="cf-tab-title">Transactions</span><span class="cf-tab-sub">Filter matrix &amp; ledger</span></span>
@@ -650,259 +647,7 @@
     }
   </style>
 
-  <!-- PANEL: NEW TRANSACTION -->
-  <section class="cf-panel" id="cfPanel-transaction" data-cf-panel="transaction" hidden>
-
-  <!-- TRANSACTION POSTING FORM -->
-  <div class="ui-card mb-4 d-print-none">
-    <div class="ui-card-header d-flex justify-content-between align-items-center">
-      <div>
-        <h5 class="mb-0"><i class="bi bi-pencil-square me-2 text-primary"></i> Post a cash-flow transaction</h5>
-        <small class="text-muted">Date &amp; time default to today. Do not re-enter client or supplier payments — those sync automatically from Accounts.</small>
-      </div>
-    </div>
-    <div class="ui-card-body">
-      <form method="POST" action="{{ url_for('cash_flow') }}" class="row g-3" id="cfRecordForm">
-        <input type="hidden" name="action" id="cfFormAction" value="record_movement">
-        <input type="hidden" name="entry_id" id="cfEntryId" value="">
-        <input type="hidden" name="from_date" value="{{ from_date }}">
-        <input type="hidden" name="to_date" value="{{ to_date }}">
-        <input type="hidden" name="idempotency_key" id="cfIdempotencyKey" value="">
-        <input type="hidden" name="category_id" id="cfCategoryId" value="">
-        <input type="hidden" name="subcategory_id" id="cfSubcategoryId" value="">
-        <input type="hidden" name="party_id" id="cfPartyId" value="">
-
-        <!-- Step 1: Direction Tabs -->
-        <div class="col-12">
-          <div class="cf-dir-tabs" role="tablist">
-            <button type="button" class="cf-dir-tab active-in" data-dir="in" id="cfTabIn">
-              <i class="bi bi-arrow-down-right fs-5"></i>
-              <span>RECEIPT [ IN ]</span>
-            </button>
-            <button type="button" class="cf-dir-tab" data-dir="out" id="cfTabOut">
-              <i class="bi bi-arrow-up-right fs-5"></i>
-              <span>PAYMENT [ OUT ]</span>
-            </button>
-            <button type="button" class="cf-dir-tab" data-dir="transfer" id="cfTabTransfer">
-              <i class="bi bi-arrow-left-right fs-5"></i>
-              <span>TRANSFER [ INTERNAL ]</span>
-            </button>
-          </div>
-          <select name="direction" id="cfDirection" class="d-none" required>
-            <option value="in" selected>Received</option>
-            <option value="out">Spent</option>
-            <option value="transfer">Transfer</option>
-          </select>
-        </div>
-
-        <!-- Step 2: Date, Time & Amount -->
-        <div class="col-md-4">
-          <label class="ui-label"><i class="bi bi-calendar-event me-1 text-primary"></i> Date &amp; time</label>
-          <input type="datetime-local" name="movement_date" id="cfDate" class="form-control" value="{{ default_movement_datetime or '' }}">
-          <div class="small text-muted mt-1">Today is pre-filled. Adjust only for back-dated entry.</div>
-        </div>
-        <div class="col-md-4">
-          <label class="ui-label"><i class="bi bi-cash-stack me-1 text-primary"></i> Amount (Rs.) <span class="text-danger">*</span></label>
-          <input type="number" step="0.01" min="0.01" name="amount" id="cfAmount" class="form-control cf-amount-box" required placeholder="0.00">
-        </div>
-        <div class="col-md-4 cf-field-account">
-          <label class="ui-label" id="cfAccountLabel"><i class="bi bi-wallet2 me-1"></i> Received into account <span class="text-danger">*</span></label>
-          <select name="cash_account_id" id="cfAccountId" class="form-select" required {% if not cash_accounts %}disabled{% endif %}>
-            <option value="">Select from Accounts…</option>
-            {% for a in cash_accounts or [] %}
-            <option value="{{ a.id }}">{{ a.name }} · {{ (a.category or 'cash')|upper }} · Rs. {{ "{:,.0f}".format(a.balance or 0) }}</option>
-            {% endfor %}
-          </select>
-        </div>
-
-        <!-- Step 3: Destination Account for Transfers -->
-        <div class="col-md-6 cf-field-dest d-none">
-          <label class="ui-label"><i class="bi bi-box-arrow-in-down-right me-1 text-primary"></i> Transfer to account <span class="text-danger">*</span></label>
-          <select name="to_account_id" id="cfToAccountId" class="form-select" {% if not cash_accounts %}disabled{% endif %}>
-            <option value="">Select destination account…</option>
-            {% for a in cash_accounts or [] %}
-            <option value="{{ a.id }}">{{ a.name }} · {{ (a.category or 'cash')|upper }} · Rs. {{ "{:,.0f}".format(a.balance or 0) }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-12 cf-field-dest d-none">
-          <div class="cf-xfer-box d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-              <div class="small text-uppercase fw-bold text-primary"><i class="bi bi-arrow-left-right me-1"></i> Internal Fund Transfer Direction</div>
-              <div class="fw-semibold fs-6" id="cfXferLabel">Source Account ➔ Destination Account</div>
-              <div class="small text-muted">Transfers do not affect total company income or expense.</div>
-            </div>
-            <div class="fw-bold font-monospace fs-5 text-primary" id="cfXferAmount">Rs. 0</div>
-          </div>
-        </div>
-
-        <!-- Step 4: Category & Subcategory Selection -->
-        <div class="col-md-5 cf-field-cat position-relative">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <label class="ui-label mb-0"><i class="bi bi-tags me-1 text-primary"></i> Category <span class="text-danger">*</span></label>
-            <button type="button" class="btn btn-link btn-sm py-0 text-decoration-none fw-bold" id="cfQuickCatToggle">+ Add category</button>
-          </div>
-          <div class="input-group">
-            <input type="text" name="category_name" id="cfCategorySearch" class="form-control" placeholder="Search or select category…" autocomplete="off" required>
-            <button type="button" class="btn btn-outline-secondary" id="cfCatDropdownBtn" tabindex="-1" title="Show all categories">
-              <i class="bi bi-chevron-down"></i>
-            </button>
-          </div>
-          <div id="cfCategoryChip" class="small mt-1 d-none">
-            <span class="badge bg-success-subtle text-success border border-success-subtle py-1 px-2 d-inline-flex align-items-center gap-1">
-              <i class="bi bi-check-circle-fill"></i> <span id="cfCategoryChipText"></span>
-              <button type="button" class="btn-close btn-close-sm ms-1" style="font-size:0.55rem;" id="cfClearCatBtn" title="Clear selection"></button>
-            </span>
-          </div>
-          <div id="cfCategoryList" class="combobox-list shadow-lg" style="display:none;" data-value-input-id="cfCategoryId" data-store="name" data-after="onCfCategoryPicked"></div>
-
-          <!-- Quick Add Category Box -->
-          <div class="cf-quick mt-2 d-none shadow-sm" id="cfQuickCat">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <span class="fw-bold small text-primary"><i class="bi bi-plus-circle me-1"></i> Quick Add Category</span>
-              <button type="button" class="btn-close btn-close-sm" id="cfCloseQuickCat"></button>
-            </div>
-            <div class="row g-2">
-              <div class="col-md-5">
-                <input type="text" id="cfQuickCatName" class="form-control form-control-sm" placeholder="Category name *">
-              </div>
-              <div class="col-md-4">
-                <select id="cfQuickCatDir" class="form-select form-select-sm">
-                  <option value="both">Received &amp; Spent</option>
-                  <option value="in">Received only</option>
-                  <option value="out">Spent only</option>
-                </select>
-              </div>
-              <div class="col-md-3">
-                <button type="button" class="btn btn-sm btn-primary w-100 fw-bold" id="cfQuickCatSave">Save</button>
-              </div>
-            </div>
-            <div class="small text-danger mt-1 fw-bold" id="cfQuickCatErr"></div>
-          </div>
-        </div>
-
-        <div class="col-md-3 cf-field-cat position-relative">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <label class="ui-label mb-0"><i class="bi bi-tag me-1 text-primary"></i> Sub-category</label>
-            <button type="button" class="btn btn-link btn-sm py-0 text-decoration-none fw-bold" id="cfQuickSubToggle">+ Add sub</button>
-          </div>
-          <div class="input-group">
-            <input type="text" name="subcategory_name" id="cfSubSearch" class="form-control" placeholder="Select sub-category…" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="cfSubDropdownBtn" tabindex="-1" title="Show sub-categories">
-              <i class="bi bi-chevron-down"></i>
-            </button>
-          </div>
-          <div id="cfSubChip" class="small mt-1 d-none">
-            <span class="badge bg-info-subtle text-info border border-info-subtle py-1 px-2 d-inline-flex align-items-center gap-1">
-              <i class="bi bi-check-circle-fill"></i> <span id="cfSubChipText"></span>
-              <button type="button" class="btn-close btn-close-sm ms-1" style="font-size:0.55rem;" id="cfClearSubBtn" title="Clear selection"></button>
-            </span>
-          </div>
-          <div id="cfSubList" class="combobox-list shadow-lg" style="display:none;" data-value-input-id="cfSubcategoryId" data-store="name"></div>
-
-          <!-- Quick Add Subcategory Box -->
-          <div class="cf-quick mt-2 d-none shadow-sm" id="cfQuickSub">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <span class="fw-bold small text-primary"><i class="bi bi-plus-circle me-1"></i> Quick Add Sub-category</span>
-              <button type="button" class="btn-close btn-close-sm" id="cfCloseQuickSub"></button>
-            </div>
-            <div class="input-group input-group-sm">
-              <input type="text" id="cfQuickSubName" class="form-control" placeholder="Sub-category name *">
-              <button type="button" class="btn btn-primary fw-bold" id="cfQuickSubSave">Save</button>
-            </div>
-            <div class="small text-danger mt-1 fw-bold" id="cfQuickSubErr"></div>
-          </div>
-        </div>
-
-        <!-- Step 5: Party Selection -->
-        <div class="col-md-4 cf-field-party">
-          <label class="ui-label mb-1" id="cfPartyTypeLabel"><i class="bi bi-person-badge me-1 text-primary"></i> Who / Party Type</label>
-          <select name="party_type" id="cfPartyType" class="form-select">
-            {% for val, lab in party_types or [] %}
-            <option value="{{ val }}">{{ lab }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-8 cf-field-party position-relative">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <label class="ui-label mb-0" id="cfPartyLabel"><i class="bi bi-person me-1 text-primary"></i> Who / Source Name</label>
-            <button type="button" class="btn btn-link btn-sm py-0 text-decoration-none fw-bold" id="cfQuickPartyToggle">+ Add party</button>
-          </div>
-          <div class="input-group">
-            <input type="text" name="party_name" id="cfPartySearch" class="form-control" placeholder="Person, workshop, driver, lender…" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="cfPartyDropdownBtn" tabindex="-1" title="Show parties">
-              <i class="bi bi-chevron-down"></i>
-            </button>
-          </div>
-          <div id="cfPartyChip" class="small mt-1 d-none">
-            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle py-1 px-2 d-inline-flex align-items-center gap-1">
-              <i class="bi bi-person-check-fill"></i> <span id="cfPartyChipText"></span>
-              <button type="button" class="btn-close btn-close-sm ms-1" style="font-size:0.55rem;" id="cfClearPartyBtn" title="Clear selection"></button>
-            </span>
-          </div>
-          <div id="cfPartyList" class="combobox-list shadow-lg" style="display:none;" data-value-input-id="cfPartyId" data-store="name" data-after="onCfPartyPicked">
-            {% for p in cf_parties or [] %}
-            <div class="combobox-item" data-combo-code="{{ p.id }}" data-combo-name="{{ p.name }}" data-combo-input="cfPartySearch" data-combo-value-input="cfPartyId" data-party-type="{{ p.party_type }}">{{ p.name }} <span class="text-muted small">({{ p.party_type }})</span></div>
-            {% endfor %}
-          </div>
-
-          <!-- Quick Add Party Box -->
-          <div class="cf-quick mt-2 d-none shadow-sm" id="cfQuickParty">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <span class="fw-bold small text-primary"><i class="bi bi-plus-circle me-1"></i> Quick Add Party</span>
-              <button type="button" class="btn-close btn-close-sm" id="cfCloseQuickParty"></button>
-            </div>
-            <div class="row g-2">
-              <div class="col-md-6">
-                <input type="text" id="cfQuickPartyName" class="form-control form-control-sm" placeholder="Party name *">
-              </div>
-              <div class="col-md-3">
-                <select id="cfQuickPartyType" class="form-select form-select-sm">
-                  {% for val, lab in party_types or [] %}
-                  <option value="{{ val }}">{{ lab }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="col-md-3">
-                <button type="button" class="btn btn-sm btn-primary w-100 fw-bold" id="cfQuickPartySave">Save</button>
-              </div>
-            </div>
-            <div class="small text-danger mt-1 fw-bold" id="cfQuickPartyErr"></div>
-          </div>
-        </div>
-
-        <!-- Step 6: Narrative / Details -->
-        <div class="col-md-4">
-          <label class="ui-label"><i class="bi bi-card-text me-1 text-primary"></i> Detail / description</label>
-          <input type="text" name="description" id="cfDescription" class="form-control" placeholder="Short explanation">
-        </div>
-        <div class="col-md-4">
-          <label class="ui-label"><i class="bi bi-journal-text me-1 text-primary"></i> Notes</label>
-          <input type="text" name="movement_note" id="cfNote" class="form-control" placeholder="Searchable extra detail (e.g. diesel, repair)">
-        </div>
-        <div class="col-md-2">
-          <label class="ui-label"><i class="bi bi-receipt me-1 text-primary"></i> Reference</label>
-          <input type="text" name="reference" id="cfReference" class="form-control" placeholder="Bill / voucher #">
-        </div>
-        <div class="col-md-2 cf-edit-reason d-none">
-          <label class="ui-label text-warning"><i class="bi bi-pencil me-1"></i> Edit reason</label>
-          <input type="text" name="edit_reason" id="cfEditReason" class="form-control border-warning" placeholder="Why the change">
-        </div>
-
-        <!-- Submit Button -->
-        <div class="col-12 d-flex gap-2 align-items-center pt-2">
-          <button type="submit" class="btn cf-save-in fw-bold px-4 py-2 fs-6 shadow-sm" id="cfSaveBtn">
-            <i class="bi bi-check-circle-fill me-1"></i> <span id="cfSaveLabel">Post Received</span>
-          </button>
-          <button type="button" class="btn btn-outline-secondary cf-edit-reason d-none px-3" id="cfCancelEdit">
-            <i class="bi bi-x-circle me-1"></i> Cancel edit
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  </section><!-- /transaction -->
+  
 
   <!-- PANEL: MASTER DATA -->
   <section class="cf-panel" id="cfPanel-master" data-cf-panel="master" hidden>
@@ -1252,6 +997,7 @@
   }
 
   function syncType() {
+    if (!directionEl) return;
     const dir = directionEl.value || 'in';
     const isTransfer = dir === 'transfer';
     const isIn = dir === 'in';
@@ -1332,12 +1078,12 @@
     });
   });
 
-  directionEl.addEventListener('change', syncType);
+  if (directionEl) directionEl.addEventListener('change', syncType);
 
   // Transfer live calculations
-  document.getElementById('cfAmount').addEventListener('input', updateTransferPreview);
-  document.getElementById('cfAccountId').addEventListener('change', updateTransferPreview);
-  toAccount.addEventListener('change', updateTransferPreview);
+  var _cfAmount = document.getElementById('cfAmount'); if (_cfAmount) _cfAmount.addEventListener('input', updateTransferPreview);
+  var _cfAccountId = document.getElementById('cfAccountId'); if (_cfAccountId) _cfAccountId.addEventListener('change', updateTransferPreview);
+  if (toAccount) toAccount.addEventListener('change', updateTransferPreview);
 
   // Clear chip buttons
   if (clearCatBtn) {
@@ -1534,10 +1280,10 @@
   });
 
   // Combobox input handling with comboSuppress check
-  catSearch.addEventListener('focus', function () {
+  if (catSearch) catSearch.addEventListener('focus', function () {
     if (typeof showCombobox === 'function') showCombobox('cfCategorySearch', 'cfCategoryList');
   });
-  catSearch.addEventListener('input', function () {
+  if (catSearch) catSearch.addEventListener('input', function () {
     if (this.dataset.comboSuppress === '1') {
       this.dataset.comboSuppress = '';
       return;
@@ -1547,10 +1293,10 @@
     if (typeof filterCombobox === 'function') filterCombobox('cfCategorySearch', 'cfCategoryList');
   });
 
-  subSearch.addEventListener('focus', function () {
+  if (subSearch) subSearch.addEventListener('focus', function () {
     if (typeof showCombobox === 'function') showCombobox('cfSubSearch', 'cfSubList');
   });
-  subSearch.addEventListener('input', function () {
+  if (subSearch) subSearch.addEventListener('input', function () {
     if (this.dataset.comboSuppress === '1') {
       this.dataset.comboSuppress = '';
       return;
@@ -1575,7 +1321,7 @@
     });
   }
 
-  form.addEventListener('submit', function () {
+  if (form) form.addEventListener('submit', function () {
     saveBtn.disabled = true;
   });
 
@@ -1589,7 +1335,7 @@
     document.getElementById('cfFormAction').value = 'record_movement';
     document.getElementById('cfEntryId').value = '';
     document.querySelectorAll('.cf-edit-reason').forEach(function (el) { el.classList.add('d-none'); });
-    form.reset();
+    if (form) form.reset();
     keyEl.value = uuid();
     if (dateEl && defaultMovementDate) dateEl.value = defaultMovementDate;
     if (catChip) catChip.classList.add('d-none');
@@ -1642,7 +1388,7 @@
             }
           });
           activateCfTab('transaction');
-          form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
     });
   });
