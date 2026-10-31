@@ -244,3 +244,34 @@ def test_recon_count_forms_include_hidden_action(app, client):
     # JS must not pick the action from whatever field currently has focus.
     assert "document.activeElement && document.activeElement.form === form" not in body
     assert "ev.submitter" in body
+
+
+def test_rendered_count_form_endpoints_save_and_clear(app, client):
+    """Both board variants post to the rendered endpoint, including AJAX clear."""
+    import re
+    from models import db, Account, CashDayAccountPosition
+
+    with app.app_context():
+        acc_id = _mk_account(db, Account, "Drawer Cash", "cash", 39610.0).id
+
+    _login(client)
+    day = "2026-10-31"
+    headers = {"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"}
+    for page in (f"/daily_reconciliation?day={day}", f"/cash_flow?recon_day={day}"):
+        body = client.get(page).get_data(as_text=True)
+        for form_type, action in (("count", "save_count"), ("clear", "clear_count")):
+            form = re.search(r'<form\b[^>]*data-dr-' + form_type + r'-form[^>]*>.*?</form>', body, re.S)
+            assert form, page
+            endpoint = re.search(r'\baction="([^"]+)"', form.group()).group(1)
+            assert endpoint == "/daily_reconciliation"
+            response = client.post(endpoint, data={
+                "action": action, "day": day, "account_id": acc_id, "counted": "39,610",
+            }, headers=headers)
+            assert response.status_code == 200
+            position = next(p for p in response.get_json()["positions"] if p["account_id"] == acc_id)
+            assert position["counted"] == (39610.0 if action == "save_count" else None)
+            if action == "save_count":
+                assert position["difference"] == 0.0
+                with app.app_context():
+                    row = CashDayAccountPosition.query.filter_by(position_date=date.fromisoformat(day), account_id=acc_id).first()
+                    assert row is not None and float(row.counted) == 39610.0

@@ -302,7 +302,9 @@
       fd.set('action', form.hasAttribute('data-dr-clear-form') ? 'clear_count' : 'save_count');
     }
     try {
-      const res = await fetch(form.action, {
+      // The form has controls named "action", which shadow form.action in
+      // browsers. Read the HTML attribute so fetch reaches the actual route.
+      const res = await fetch(form.getAttribute('action'), {
         method:'POST',
         body:fd,
         credentials:'same-origin',
