@@ -648,6 +648,13 @@ def delete_account(account_id):
                 before=before, after={'deleted': True}, amount_before=before['balance'], amount_after=0,
                 account_before_id=a.id, reason='Unreferenced account hard-deleted',
             )
+            # Daily Reconciliation rows are keyed by the numeric account id and
+            # carry no FK, so they survive the delete.  SQLite then reuses this
+            # id for the next account created and the old typed counts / locked
+            # openings show up on it as if they were hard-coded.  Clear them
+            # together with the account.
+            from app.services.cash_day_recon import clear_account_reconciliation_state
+            clear_account_reconciliation_state(a.id, commit=False)
             db.session.delete(a)
             db.session.commit()
             flash('Unreferenced account deleted.', 'success')

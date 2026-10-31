@@ -106,12 +106,25 @@ _RESET_CONTEXT = None
 _WEASYPRINT_MODULE = None
 
 DOMAIN_WIPE_REGISTRY = {
+    # Order matters: children before the rows they point at.  Everything that
+    # stores money state for an account has to be here, otherwise a domain wipe
+    # leaves figures that look hard-coded on the next set of accounts (SQLite
+    # reuses the freed account ids).
     'accounts_domain': [
+        # cash-flow rows (audit -> entry -> adjustment chain)
+        'CashFlowEntryAudit',
+        'CashFlowEntry',
+        'CashFlowReconciliationAudit',
+        'CashFlowDifferenceAdjustment',
+        # ledger (references account_reconciliation, so it goes before it)
         'AccountTransaction',
+        # per-account reconciliation history + daily board counts/locks
+        'AccountReconciliation',
+        'CashDayAccountPosition',
+        'CashDayLock',
+        # drawer
         'FbmCashDrawerEntry',
         'FbmCashDrawerCategory',
-        'CashFlowDifferenceAdjustment',
-        'CashFlowReconciliationAudit',
         # Future tables should be added only here to be included in wipes
         # Example future table: 'FutureAccountAuditLog' (defined in models.py)
     ],

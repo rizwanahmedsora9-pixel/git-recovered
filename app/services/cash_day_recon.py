@@ -44,6 +44,175 @@ def _to_date(value) -> date:
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
 
 
+def _naive_dt(value):
+    """Normalise a stored timestamp to a naive ``datetime`` (PKT wall clock)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime.combine(value, time.min)
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def _position_written_at(pos):
+    """When the board row was last written (lock stamp wins over edit stamp)."""
+    if pos is None:
+        return None
+    return (
+        _naive_dt(getattr(pos, "locked_at", None))
+        or _naive_dt(getattr(pos, "updated_at", None))
+    )
+
+
+def position_belongs_to_account(pos, account) -> bool:
+    """Whether a stored board row was really written for *account*.
+
+    Daily reconciliation rows are keyed by the numeric ``account_id`` only.
+    SQLite (no ``AUTOINCREMENT`` on these tables) hands the highest rowid back
+    out after a delete, so an account created after a wipe can land on the id
+    of a removed one and inherit its counts and locked openings.  The board then
+    shows figures nobody typed for the new account — they look hard-coded.
+
+    A row can only belong to the account currently occupying that id when the
+    row was written after the account record itself was created.  Rows with no
+    usable timestamps are left alone (nothing proves they are stale).
+    """
+    if pos is None or account is None:
+        return False
+    created = _naive_dt(getattr(account, "created_at", None))
+    if created is None:
+        return True
+    written = _position_written_at(pos)
+    if written is None:
+        return True
+    return written >= created
+
+
+def _refresh_lock_totals(lock) -> None:
+    """Recompute a day lock's totals from its surviving account positions."""
+    rows = CashDayAccountPosition.query.filter_by(position_date=lock.lock_date).all()
+    expected = sum(float(r.expected_closing or 0) for r in rows)
+    counted = sum(
+        float(r.counted if r.counted is not None else (r.expected_closing or 0))
+        for r in rows
+    )
+    lock.total_expected = _money_round(expected)
+    lock.total_counted = _money_round(counted)
+    lock.difference = _money_round(counted - expected)
+
+
+def purge_stale_reconciliation_state(*, commit=True):
+    """Delete Daily Reconciliation rows that cannot belong to today's accounts.
+
+    This is the self-healing counterpart to a wipe: it removes
+
+    * positions whose account no longer exists, and
+    * positions written before the account now holding that id was created
+      (leftovers from a deleted account whose id was reused),
+    * day locks that have no surviving position at all, and
+    * stale day totals on locks that lost some of their accounts.
+
+    It is safe to call on every board render — nothing is written unless
+    something stale is found.  Returns ``(positions_removed, locks_removed)``.
+    """
+    accounts = {a.id: a for a in Account.query.all()}
+    positions_removed = 0
+    touched_dates = set()
+
+    for pos in CashDayAccountPosition.query.all():
+        account = accounts.get(pos.account_id)
+        if position_belongs_to_account(pos, account):
+            continue
+        touched_dates.add(_to_date(pos.position_date))
+        db.session.delete(pos)
+        positions_removed += 1
+
+    if positions_removed:
+        db.session.flush()
+
+    locks_removed = 0
+    existing_locks = CashDayLock.query.all()
+    if existing_locks:
+        live_dates = {
+            _to_date(row[0])
+            for row in db.session.query(
+                CashDayAccountPosition.position_date
+            ).distinct().all()
+        }
+        # A day lock only means something while it still has per-account
+        # positions to freeze; otherwise it is residue from a previous dataset
+        # (and would keep showing a verified/locked banner with old totals).
+        for lock in existing_locks:
+            lock_day = _to_date(lock.lock_date)
+            if lock_day not in live_dates:
+                db.session.delete(lock)
+                locks_removed += 1
+            elif lock_day in touched_dates:
+                _refresh_lock_totals(lock)
+
+    if positions_removed or locks_removed:
+        if commit:
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                raise
+    return positions_removed, locks_removed
+
+
+def clear_account_reconciliation_state(account_id, *, commit=True) -> int:
+    """Remove every Daily Reconciliation row belonging to one account id.
+
+    Called when an account is deleted so the id it frees up cannot hand its
+    old counts/locks to whichever account is created next.
+    """
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        return 0
+    dates = {
+        _to_date(row[0])
+        for row in db.session.query(CashDayAccountPosition.position_date)
+        .filter(CashDayAccountPosition.account_id == account_id)
+        .distinct()
+        .all()
+    }
+    removed = int(
+        CashDayAccountPosition.query.filter_by(account_id=account_id).delete(
+            synchronize_session=False
+        )
+        or 0
+    )
+    if removed:
+        live_dates = {
+            _to_date(row[0])
+            for row in db.session.query(
+                CashDayAccountPosition.position_date
+            ).distinct().all()
+        }
+        for lock in CashDayLock.query.filter(
+            CashDayLock.lock_date.in_(sorted(dates))
+        ).all():
+            lock_day = _to_date(lock.lock_date)
+            if lock_day in live_dates:
+                _refresh_lock_totals(lock)
+            else:
+                db.session.delete(lock)
+    if removed and commit:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+    return removed
+
+
 def _opening_effective_day(account):
     ob_date = getattr(account, "opening_balance_date", None)
     if ob_date is None:
@@ -179,15 +348,29 @@ def _activity_between(from_date: str, to_date: str) -> dict:
 
 
 def account_positions_for_date(day) -> list:
-    """Return the per-account position dicts for a financial day."""
+    """Return the per-account position dicts for a financial day.
+
+    Everything shown here is derived from the accounts and their ledger.  The
+    only stored inputs are the physically counted figures and the verified day
+    locks — and those are used only when they genuinely belong to the account
+    holding that id today (see ``position_belongs_to_account``).  Residue from
+    a previous dataset is purged first, so a wipe + re-entered accounts start
+    from a clean board instead of old "hard-coded" looking figures.
+    """
+    try:
+        purge_stale_reconciliation_state()
+    except Exception:  # never block the board on self-healing
+        db.session.rollback()
+
     day = _to_date(day)
     day_str = day.strftime("%Y-%m-%d")
     accounts = _cf_company_accounts(active_only=True)
+    account_by_id = {a.id: a for a in accounts}
 
-    saved = {
-        p.account_id: p
-        for p in CashDayAccountPosition.query.filter_by(position_date=day).all()
-    }
+    saved = {}
+    for p in CashDayAccountPosition.query.filter_by(position_date=day).all():
+        if position_belongs_to_account(p, account_by_id.get(p.account_id)):
+            saved[p.account_id] = p
     locks = {}
     prior_locked = CashDayAccountPosition.query.filter(
         CashDayAccountPosition.is_locked.is_(True),
@@ -195,6 +378,8 @@ def account_positions_for_date(day) -> list:
         CashDayAccountPosition.account_id.in_([a.id for a in accounts] or [0]),
     ).order_by(CashDayAccountPosition.position_date.asc()).all()
     for p in prior_locked:
+        if not position_belongs_to_account(p, account_by_id.get(p.account_id)):
+            continue
         locks[p.account_id] = p
 
     # Opening = locked carry-forward, else the ledger balance at the end of the
@@ -261,6 +446,10 @@ def save_count(day, account_id, counted, actor=None):
     "160 000") — parsing lives here so the browser never has to be the
     validator.  Locked days are immutable until they are unlocked.
     """
+    try:
+        purge_stale_reconciliation_state()
+    except Exception:
+        db.session.rollback()
     day = _to_date(day)
     try:
         account_id = int(account_id)
@@ -286,6 +475,9 @@ def save_count(day, account_id, counted, actor=None):
             account_name=(acc.name if acc else ""),
         )
         db.session.add(pos)
+    # Keep the stored label in step with renames; figures always come from the
+    # account + ledger, never from this snapshot.
+    pos.account_name = acc.name or pos.account_name
     pos.counted = amount
     pos.difference = None  # recomputed on read
     pos.updated_by = actor_name
@@ -303,6 +495,10 @@ def lock_day(day, actor=None, note=""):
     day = _to_date(day)
     actor_name = getattr(actor, "username", None) or actor
     now = pk_now()
+    try:
+        purge_stale_reconciliation_state()
+    except Exception:
+        db.session.rollback()
     positions = account_positions_for_date(day)
 
     total_expected = 0.0
@@ -361,6 +557,10 @@ def unlock_day(day):
 
 
 def delete_count(day, account_id):
+    try:
+        purge_stale_reconciliation_state()
+    except Exception:
+        db.session.rollback()
     day = _to_date(day)
     try:
         account_id = int(account_id)
