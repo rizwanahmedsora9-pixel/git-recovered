@@ -12,8 +12,13 @@
                     <input type="text" name="name" value="{{ c.name }}" class="form-control bg-dark text-white border-secondary" required>
                 </div>
                 <div class="mb-3">
-                    <label class="text-white-50 small fw-bold mb-1">CATEGORY</label>
-                    <input type="text" name="category" value="{{ c.category or 'General' }}" list="categoryList" class="form-control bg-dark text-white border-secondary" placeholder="Type or select category">
+                    <label class="text-white-50 small fw-bold mb-1">CATEGORY <span class="text-danger">*</span></label>
+                    <select name="category" class="form-select bg-dark text-white border-secondary" required>
+                        <option value="">-- Select client category --</option>
+                        {% for cat in categories %}
+                        <option value="{{ cat.name }}" {% if (c.category or '').strip().lower() == cat.name.strip().lower() %}selected{% endif %}>{{ cat.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="mb-3">
                     <label class="text-white-50 small fw-bold mb-1">CODE <span class="text-danger">*</span></label>

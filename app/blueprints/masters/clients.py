@@ -81,16 +81,8 @@ def clients():
         total_received_visible += total_credit
 
     all_clients_list = Client.query.order_by(Client.name.asc()).all()
-    categories = [
-        row[0] for row in db.session.query(Client.category).distinct().filter(
-            Client.category != None,
-            func.trim(Client.category) != ''
-        ).order_by(Client.category.asc()).all()
-    ]
-    for default_cat in ['General', 'Open Khata', 'Walking-Customer', 'Misc']:
-        if default_cat not in categories:
-            categories.append(default_cat)
-    categories = sorted(categories, key=lambda x: str(x).lower())
+    category_rows = ensure_client_category_options()
+    categories = [row.name for row in category_rows]
 
     return render_template('clients.html',
                            active_pagination=active_pagination,
@@ -111,5 +103,6 @@ def client_modals(client_id):
     """Render one active client's edit/transfer dialogs on demand."""
     client = Client.query.filter(Client.id == client_id, Client.is_active == True).first_or_404()
     active_clients = Client.query.filter(Client.is_active == True).order_by(Client.name.asc()).all()
-    return render_template('_client_modals.html', c=client, active_clients=active_clients)
+    categories = ensure_client_category_options()
+    return render_template('_client_modals.html', c=client, active_clients=active_clients, categories=categories)
 
