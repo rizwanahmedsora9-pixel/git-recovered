@@ -24,8 +24,9 @@
   .dr-account-title { font-weight:800; color:#0f172a; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
   .dr-account-chip { display:inline-flex; align-items:center; border-radius:999px; padding:2px 7px; font-size:10px; font-weight:800; letter-spacing:.4px; background:#e0f2fe; color:#0369a1; margin-left:6px; }
   .dr-count-form { min-width:172px; }
-  .dr-count-input { width:118px; text-align:right; }
-  .dr-save-state { min-width:66px; font-size:11px; }
+  .dr-count-input { width:124px; text-align:right; }
+  .dr-count-input[readonly] { background:#eef2ff; }
+  .dr-save-state { min-width:84px; max-width:190px; font-size:11px; white-space:normal; line-height:1.2; }
   .dr-counted { background:#eef2ff; color:#4f46e5; font-weight:700; }
   .in-pos { color:#16a34a; } .out-neg { color:#dc2626; }
   .tin-pos { color:#2563eb; } .tout-neg { color:#6366f1; }
@@ -116,14 +117,17 @@
     <div class="col-md-4"><div class="dr-kpi">
       <div class="lbl">Total Expected Ledger Balance</div>
       <div class="val dr-mono text-dark" data-dr-total="expected">Rs. {{ "{:,.0f}".format(dr.total_expected) }}</div>
+      <div class="small text-muted mt-1">All {{ dr.accounts_total }} company money account{{ '' if dr.accounts_total == 1 else 's' }}</div>
     </div></div>
     <div class="col-md-4"><div class="dr-kpi">
       <div class="lbl">Total Actual Counted Balance</div>
       <div class="val dr-mono" style="color:#4f46e5;" data-dr-total="counted">{% if dr.total_counted is not none %}Rs. {{ "{:,.0f}".format(dr.total_counted) }}{% else %}-{% endif %}</div>
+      <div class="small text-muted mt-1" data-dr-counted-summary>{{ dr.counted_accounts }} of {{ dr.accounts_total }} account{{ '' if dr.accounts_total == 1 else 's' }} counted</div>
     </div></div>
     <div class="col-md-4"><div class="dr-kpi">
       <div class="lbl">Net Difference</div>
-      <div class="val dr-mono {% if dr.net_difference == 0 %}text-success{% elif dr.net_difference < 0 %}text-danger{% else %}text-success{% endif %}" data-dr-total="difference">Rs. {{ "{:,.0f}".format(dr.net_difference) }}</div>
+      <div class="val dr-mono {% if dr.net_difference is none %}text-muted{% elif dr.net_difference == 0 %}text-success{% else %}text-danger{% endif %}" data-dr-total="difference">{% if dr.net_difference is none %}-{% else %}Rs. {{ "{:,.0f}".format(dr.net_difference) }}{% endif %}</div>
+      <div class="small text-muted mt-1">Counted vs expected closing of the counted account{{ '' if dr.counted_accounts == 1 else 's' }}</div>
     </div></div>
   </div>
 
@@ -166,10 +170,12 @@
                 <input type="hidden" name="account_id" value="{{ p.account_id }}">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 {% if dr.embed %}<input type="hidden" name="return_to" value="{{ dr_return_to }}">{% endif %}
-                <input type="number" step="0.01" name="counted" class="form-control form-control-sm dr-mono dr-count-input"
-                       value="{{ p.counted if p.counted is not none else '' }}"
-                       placeholder="{{ "{:,.0f}".format(p.expected_closing) }}" aria-label="Actual counted balance for {{ p.account_name }}" required>
-                <button type="submit" class="btn btn-sm btn-success fw-bold" name="action" value="save_count" title="Save counted balance"><i class="bi bi-save"></i></button>
+                <input type="text" inputmode="decimal" autocomplete="off" name="counted" class="form-control form-control-sm dr-mono dr-count-input"
+                       value="{{ "{:,.2f}".format(p.counted).rstrip('0').rstrip('.') if p.counted is not none else '' }}"
+                       placeholder="{{ "{:,.0f}".format(p.expected_closing) }}" aria-label="Actual counted balance for {{ p.account_name }}"
+                       {% if p.is_locked %}readonly title="Day is locked — unlock it to change the count"{% else %}title="Type the physical balance (commas are fine)"{% endif %}>
+                <button type="submit" class="btn btn-sm btn-success fw-bold" name="action" value="save_count"
+                        {% if p.is_locked %}disabled title="Day is locked — unlock it to change the count"{% else %}title="Save counted balance"{% endif %}><i class="bi bi-save"></i></button>
               </form>
             </td>
             <td class="text-end dr-mono" data-dr-field="difference">
@@ -215,15 +221,22 @@
   }
 
   const money0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+  const moneyInput = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
   function rs(value){ return 'Rs. ' + money0.format(Number(value || 0)); }
+  function fmtInput(value){
+    if (value === null || value === undefined || value === '') return '';
+    return moneyInput.format(Number(value));
+  }
   function signedRs(prefix, value){ return prefix + ' ' + rs(value); }
   function setTotal(name, value){
     const el = document.querySelector('[data-dr-total="' + name + '"]');
     if (!el) return;
     el.textContent = value === null || value === undefined ? '-' : rs(value);
     if (name === 'difference') {
-      el.classList.toggle('text-danger', Number(value || 0) < 0);
-      el.classList.toggle('text-success', Number(value || 0) >= 0);
+      const none = value === null || value === undefined;
+      el.classList.toggle('text-muted', none);
+      el.classList.toggle('text-danger', !none && Number(value) !== 0);
+      el.classList.toggle('text-success', !none && Number(value) === 0);
     }
   }
   function diffHtml(p){
@@ -237,6 +250,12 @@
     setTotal('expected', payload.total_expected);
     setTotal('counted', payload.total_counted);
     setTotal('difference', payload.net_difference);
+    const summary = document.querySelector('[data-dr-counted-summary]');
+    if (summary && payload.accounts_total !== undefined) {
+      const n = payload.counted_accounts || 0;
+      const t = payload.accounts_total || 0;
+      summary.textContent = n + ' of ' + t + ' account' + (t === 1 ? '' : 's') + ' counted';
+    }
     payload.positions.forEach(function(p){
       const row = document.querySelector('[data-dr-row="' + p.account_id + '"]');
       if (!row) return;
@@ -254,8 +273,12 @@
       const input = row.querySelector('input[name="counted"]');
       if (input) {
         input.placeholder = money0.format(Number(p.expected_closing || 0));
-        input.value = p.counted === null || p.counted === undefined ? '' : p.counted;
+        // Never reformat the field the user is typing in.
+        if (document.activeElement !== input) input.value = fmtInput(p.counted);
+        input.readOnly = !!p.is_locked;
       }
+      const saveBtn = row.querySelector('button[value="save_count"]');
+      if (saveBtn) saveBtn.disabled = !!p.is_locked;
     });
   }
   function showSaveState(state, text, cls, title){
@@ -301,7 +324,13 @@
         window.setTimeout(function(){ if (state && state.textContent === 'Saved') state.textContent = ''; }, 1200);
       } else {
         const csrfExpired = /csrf|token|session expired|log in/i.test(errMsg);
-        showSaveState(state, csrfExpired ? 'Reload page & retry' : 'Error', 'text-danger', errMsg);
+        // Show the reason the server gave (locked day, invalid amount, …)
+        // instead of a bare "Error" the user cannot act on.
+        const label = csrfExpired
+          ? 'Reload page & retry'
+          : (errMsg && errMsg.length <= 34 ? errMsg : 'Not saved');
+        showSaveState(state, label, 'text-danger', errMsg);
+        if (state) state.classList.add('fw-semibold');
         throw new Error(errMsg);
       }
     } catch (err) {
