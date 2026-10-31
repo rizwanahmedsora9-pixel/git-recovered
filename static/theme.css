@@ -63,8 +63,7 @@ html, body {
 }
 
 .sidebar,
-.mobile-header,
-.loading-overlay {
+.mobile-header {
     background: var(--surface-2) !important;
     color: var(--text-primary) !important;
     border-color: var(--border-color) !important;

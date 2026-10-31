@@ -191,6 +191,24 @@ function submitCancelSelection{{ client.id }}() {
 }
 </script>
 
+<!-- Tab navigation: Ledger (existing view) + Material Analysis (client's
+     billed material breakdown).  Unique tab name — no other tab exists. -->
+<ul class="nav nav-tabs border-bottom mb-4 d-print-none" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="ledger-tab" data-bs-toggle="tab" data-bs-target="#ledgerPane" type="button" role="tab" aria-controls="ledgerPane" aria-selected="true">
+            <i class="bi bi-journal-text me-1"></i>Ledger
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="material-analysis-tab" data-bs-toggle="tab" data-bs-target="#materialAnalysisPane" type="button" role="tab" aria-controls="materialAnalysisPane" aria-selected="false">
+            <i class="bi bi-pie-chart-line me-1"></i>Material Analysis
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="ledgerPane" role="tabpanel" aria-labelledby="ledger-tab">
+
 <!-- Ledger totals: same three figures the print/PDF summary carries, so the
      on-screen view and the exported document can never disagree. -->
 <div class="row g-3 mb-4 ledger-totals-row">
@@ -485,6 +503,141 @@ function submitCancelSelection{{ client.id }}() {
         </div>
     </div>
 </div>
+
+</div><!-- /ledgerPane -->
+
+<!-- ============================ Material Analysis ============================
+     Client's billed ledger lines only (bookings + direct sales).  Two report
+     options: category-wise and material-wise, each with grand totals. -->
+<div class="tab-pane fade" id="materialAnalysisPane" role="tabpanel" aria-labelledby="material-analysis-tab">
+    <div class="card border-0 shadow-sm mb-4" style="background: #1e293b; border: 2px solid #475569 !important; border-radius: 15px; overflow: hidden;">
+        <div class="card-header border-bottom border-secondary py-3 d-flex justify-content-between align-items-center flex-wrap gap-2" style="background: #0f172a;">
+            <h5 class="mb-0 text-warning fw-bold"><i class="bi bi-pie-chart me-2"></i>Material Analysis</h5>
+            <span class="badge bg-dark border border-secondary text-info">
+                Client: {{ client.code or 'N/A' }} - {{ client.name }}
+            </span>
+        </div>
+        <div class="card-body">
+            <p class="text-white-50 small mb-3">
+                Based on this client's booked and direct-sale bill lines. Rental charges are
+                service / rent lines (e.g. <code>RENT-...</code>), recognised with the same rule
+                used by the sale form and the P&amp;L.
+            </p>
+
+            <!-- Report option toggle -->
+            <ul class="nav nav-pills mb-4 d-print-none" role="group">
+                <li class="nav-item">
+                    <button class="nav-link active bg-info text-dark fw-bold" type="button" data-ma-report="category">
+                        <i class="bi bi-folder2-open me-1"></i>Category-Wise Report
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" type="button" data-ma-report="material">
+                        <i class="bi bi-box-seam me-1"></i>Material-Wise Report
+                    </button>
+                </li>
+            </ul>
+
+            <!-- ---------- Option 1: Category-Wise Report ---------- -->
+            <div id="maCategoryReport">
+                <h6 class="text-info fw-bold mb-2"><i class="bi bi-folder2-open me-1"></i>Category-Wise Report</h6>
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover align-middle mb-0 material-analysis-table">
+                        <thead style="background: #020617;">
+                            <tr>
+                                <th class="ps-3">Category</th>
+                                <th class="text-end">Total Quantity</th>
+                                <th class="text-end">Total Payment</th>
+                                <th class="text-end pe-3">Rental Charges</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in category_rows %}
+                            <tr style="border-bottom: 1px solid #334155;">
+                                <td class="ps-3 fw-bold">{{ row.category }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.2f}".format(row.payment) }}</td>
+                                <td class="text-end pe-3 ma-qty {% if row.rent > 0 %}text-warning fw-bold{% endif %}">{{ "{:,.2f}".format(row.rent) }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="4" class="p-5 text-center text-white-50">No material ledger data found for this client.</td></tr>
+                            {% endfor %}
+                            <tr class="ma-grand-row">
+                                <td class="ps-3">Grand Total</td>
+                                <td class="text-end ma-qty">{{ "{:,.3f}".format(category_grand.qty).rstrip('0').rstrip('.') }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.2f}".format(category_grand.payment) }}</td>
+                                <td class="text-end pe-3 ma-qty">{{ "{:,.2f}".format(category_grand.rent) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ---------- Option 2: Material-Wise Report ---------- -->
+            <div id="maMaterialReport" style="display: none;">
+                <h6 class="text-info fw-bold mb-2"><i class="bi bi-box-seam me-1"></i>Material-Wise Report</h6>
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover align-middle mb-0 material-analysis-table">
+                        <thead style="background: #020617;">
+                            <tr>
+                                <th class="ps-3">Material</th>
+                                <th>Category</th>
+                                <th class="text-end">Total Quantity</th>
+                                <th class="text-end">Total Amount</th>
+                                <th class="text-end pe-3">Rental Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in material_rows %}
+                            <tr style="border-bottom: 1px solid #334155;">
+                                <td class="ps-3 fw-bold">
+                                    {{ row.material }}
+                                    {% if row.code %}<span class="badge bg-dark border border-secondary text-white-50 fw-normal">{{ row.code }}</span>{% endif %}
+                                </td>
+                                <td>{{ row.category }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.2f}".format(row.amount) }}</td>
+                                <td class="text-end pe-3 ma-qty {% if row.rent > 0 %}text-warning fw-bold{% endif %}">{{ "{:,.2f}".format(row.rent) }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="p-5 text-center text-white-50">No material ledger data found for this client.</td></tr>
+                            {% endfor %}
+                            <tr class="ma-grand-row">
+                                <td class="ps-3">Grand Total</td>
+                                <td></td>
+                                <td class="text-end ma-qty">{{ "{:,.3f}".format(material_grand.qty).rstrip('0').rstrip('.') }}</td>
+                                <td class="text-end ma-qty">{{ "{:,.2f}".format(material_grand.amount) }}</td>
+                                <td class="text-end pe-3 ma-qty">{{ "{:,.2f}".format(material_grand.rent) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div><!-- /materialAnalysisPane -->
+
+</div><!-- /tab-content -->
+
+<script>
+// Material Analysis: switch between the two report options.
+document.querySelectorAll('[data-ma-report]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var report = this.getAttribute('data-ma-report');
+        document.querySelectorAll('[data-ma-report]').forEach(function (b) {
+            var on = (b === btn);
+            b.classList.toggle('active', on);
+            b.classList.toggle('bg-info', on);
+            b.classList.toggle('text-dark', on);
+            b.classList.toggle('fw-bold', on);
+        });
+        var cat = document.getElementById('maCategoryReport');
+        var mat = document.getElementById('maMaterialReport');
+        if (cat) cat.style.display = (report === 'category') ? '' : 'none';
+        if (mat) mat.style.display = (report === 'material') ? '' : 'none';
+    });
+});
+</script>
 
 <!-- Edit Modals for Transaction Types -->
 {% for key, txn in transactions_map.items() %}
@@ -897,6 +1050,38 @@ function submitCancelSelection{{ client.id }}() {
     .ledger-print-area tr {
         page-break-inside: avoid !important;
         break-inside: avoid-page !important;
+    }
+}
+
+/* Material Analysis tab */
+.material-analysis-table thead th {
+    background: #020617 !important;
+}
+.material-analysis-table tbody tr {
+    border-bottom: 1px solid #334155;
+}
+.material-analysis-table tr.ma-grand-row td {
+    background: #0f172a;
+    border-top: 2px solid #475569;
+    color: #fbbf24;
+    font-weight: 700;
+}
+.material-analysis-table .ma-qty {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+/* Print: show only the active tab pane, hide the tab/pill chrome. */
+@media print {
+    .nav-tabs,
+    .nav-pills {
+        display: none !important;
+    }
+    .tab-pane {
+        display: none !important;
+    }
+    .tab-pane.active,
+    .tab-pane.show {
+        display: block !important;
     }
 }
 </style>

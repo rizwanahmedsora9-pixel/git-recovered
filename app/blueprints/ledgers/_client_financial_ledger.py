@@ -1,6 +1,136 @@
 """client — split from ledgers.py."""
 from ._common import *  # noqa
 
+# Category bucket used for rent/service lines (services have no Material
+# Category of their own — they are charges, not stock).
+RENTAL_CATEGORY = "Rental / Services"
+UNCATEGORIZED = "Uncategorized"
+
+
+def build_client_material_analysis(client_name_norm, materials=None, services=None):
+    """Material-wise and category-wise analysis of a client's billed ledger lines.
+
+    Built strictly from the client's own ledger data: the line items of every
+    non-void Booking and DirectSale belonging to the client.  No other client's
+    rows are ever considered.
+
+    Returns ``(material_rows, category_rows, material_grand, category_grand)``:
+
+    * ``material_rows``  — one row per material/service name: material, code,
+      category, qty, amount, rent.
+    * ``category_rows``  — one row per category: category, qty, payment, rent.
+    * ``material_grand`` / ``category_grand`` — totals dicts.
+
+    Rental charges are recognised with the shared ``is_service_name`` rule (the
+    same rule the sale form, ``rent_item_revenue`` and the P&L use), so rent
+    lines are always counted the same way everywhere in the application.
+    """
+    from app.services.lookups import is_service_name
+
+    # --- Name indexes built once (Material master + Service master) ----------
+    mat_by_name = {}
+    if materials is None:
+        materials = Material.query.all()
+    for m in materials:
+        for key in (m.name, m.code):
+            if key:
+                mat_by_name.setdefault(str(key).strip().lower(), m)
+
+    svc_by_name = {}
+    if services is None:
+        services = Service.query.all()
+    for s in services:
+        for key in (s.name, s.code):
+            if key:
+                svc_by_name.setdefault(str(key).strip().lower(), s)
+
+    def resolve(name):
+        """Return ``(master_record, category_name)`` for a bill line name."""
+        raw = (name or '').strip()
+        if not raw:
+            return None, UNCATEGORIZED
+        if is_service_name(raw):
+            return svc_by_name.get(raw.lower()), RENTAL_CATEGORY
+        mat = mat_by_name.get(raw.lower())
+        if mat is None:
+            # Historical/renamed material not in the current master.
+            mat = Material.query.filter(
+                or_(Material.name.ilike(raw), Material.code.ilike(raw))
+            ).first()
+            if mat is not None:
+                mat_by_name.setdefault(raw.lower(), mat)
+        if mat is None:
+            return None, UNCATEGORIZED
+        return mat, (mat.category.name if mat.category else UNCATEGORIZED)
+
+    # --- Collect billed lines: bookings + direct sales (this client only) ----
+    agg = {}
+
+    def _add_line(name, qty, rate, discount):
+        if not (name or '').strip():
+            return
+        qty = float(qty or 0)
+        amount = max(0.0, round(qty * float(rate or 0) - float(discount or 0), 2))
+        entry = agg.setdefault(name.strip(), {'qty': 0.0, 'amount': 0.0, 'rent': 0.0})
+        entry['qty'] += qty
+        entry['amount'] += amount
+        if is_service_name(name):
+            entry['rent'] += amount
+
+    bookings = Booking.query.filter(
+        func.lower(func.trim(Booking.client_name)) == client_name_norm,
+        Booking.is_void == False,  # noqa: E712
+    ).all()
+    for b in bookings:
+        for item in b.items:
+            _add_line(item.material_name, item.qty, item.price_at_time, item.discount)
+
+    direct_sales = DirectSale.query.filter(
+        func.lower(func.trim(DirectSale.client_name)) == client_name_norm,
+        DirectSale.is_void == False,  # noqa: E712
+    ).all()
+    for s in direct_sales:
+        for item in s.items:
+            _add_line(item.product_name, item.qty, item.price_at_time, item.discount)
+
+    # --- Material-wise rows ---------------------------------------------------
+    material_rows = []
+    for name, entry in agg.items():
+        mat, category = resolve(name)
+        material_rows.append({
+            'material': name,
+            'code': (mat.code if mat and mat.code else ''),
+            'category': category,
+            'qty': entry['qty'],
+            'amount': entry['amount'],
+            'rent': entry['rent'],
+        })
+    material_rows.sort(key=lambda r: (r['category'], r['material'].lower()))
+
+    # --- Category-wise rows ---------------------------------------------------
+    cat_map = {}
+    for row in material_rows:
+        e = cat_map.setdefault(
+            row['category'], {'category': row['category'], 'qty': 0.0, 'payment': 0.0, 'rent': 0.0}
+        )
+        e['qty'] += row['qty']
+        e['payment'] += row['amount']
+        e['rent'] += row['rent']
+    category_rows = sorted(cat_map.values(), key=lambda r: r['category'])
+
+    def _grand(rows, keys):
+        total = {k: 0.0 for k in keys}
+        for r in rows:
+            for k in keys:
+                total[k] += float(r.get(k, 0) or 0)
+        return total
+
+    material_grand = _grand(material_rows, ('qty', 'amount', 'rent'))
+    category_grand = _grand(category_rows, ('qty', 'payment', 'rent'))
+
+    return material_rows, category_rows, material_grand, category_grand
+
+
 @bp.route('/ledger/<int:client_id>')
 @login_required
 def financial_ledger(client_id):
@@ -655,6 +785,12 @@ def financial_ledger(client_id):
 
     all_clients = Client.query.filter_by(is_active=True).order_by(Client.name.asc()).all()
     materials = Material.query.order_by(Material.name.asc()).all()
+    services = Service.query.order_by(Service.name.asc()).all()
+
+    # Material Analysis tab data (client's billed ledger lines only).
+    material_rows, category_rows, material_grand, category_grand = build_client_material_analysis(
+        client_name_norm, materials=materials, services=services
+    )
 
     # Build transaction objects for modals
     transactions_map = {}
@@ -686,5 +822,9 @@ def financial_ledger(client_id):
                            cancel_company_due=cancel_company_due,
                            clients=all_clients,
                            materials=materials,
+                           material_rows=material_rows,
+                           category_rows=category_rows,
+                           material_grand=material_grand,
+                           category_grand=category_grand,
                            transactions_map=transactions_map)
 
