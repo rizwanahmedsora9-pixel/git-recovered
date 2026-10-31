@@ -82,7 +82,7 @@
       </div>
       <div>
         <div class="fw-bold text-primary" style="letter-spacing:.4px;">FINANCIAL DAY STATUS: LOCKED / CLOSED</div>
-        <div class="small text-secondary">Locked by {{ dr.day_lock.locked_by or '—' }} on {{ dr.day_lock.locked_at.strftime('%Y-%m-%d %H:%M') if dr.day_lock.locked_at else '—' }}. Locked counted totals are carried to the next day's opening.</div>
+        <div class="small text-secondary">Final day close by {{ dr.day_lock.locked_by or '—' }} on {{ dr.day_lock.locked_at.strftime('%Y-%m-%d %H:%M') if dr.day_lock.locked_at else '—' }}. Locked counted totals are carried to the next day's opening. {{ dr.shift_closes|length }} shift close checkpoint{{ '' if dr.shift_closes|length == 1 else 's' }} retained below.</div>
       </div>
     </div>
     <form method="POST" action="{{ dr_post_action }}" onsubmit="return confirm('Unlock day {{ dr.day_str }}? Next day openings will revert to ledger.');">
@@ -100,17 +100,65 @@
       </div>
       <div>
         <div class="fw-bold text-success" style="letter-spacing:.4px;">FINANCIAL DAY STATUS: OPEN FOR RECONCILIATION</div>
-        <div class="small text-secondary">All account balances can be counted and settled for this date.</div>
+        <div class="small text-secondary">Record one or more shift closes as staff hand over; finalize the day only after the last shift. {{ dr.shift_closes|length }} shift close checkpoint{{ '' if dr.shift_closes|length == 1 else 's' }} recorded.</div>
       </div>
     </div>
-    <form method="POST" action="{{ dr_post_action }}" onsubmit="return confirm('Verify & lock day {{ dr.day_str }}? Locked counted totals become the next day opening balances.');">
+    <form method="POST" action="{{ dr_post_action }}" onsubmit="return confirm('Finalize and lock day {{ dr.day_str }}? This is the final daily close. Locked counted totals become the next day opening balances.');">
       <input type="hidden" name="day" value="{{ dr.day_str }}">
       {% if dr.embed %}<input type="hidden" name="return_to" value="{{ dr_return_to }}">{% endif %}
-      <button class="btn btn-success fw-bold px-3" name="action" value="lock"><i class="bi bi-file-earmark-check me-1"></i> Verify &amp; Lock / Close Day</button>
+      <button class="btn btn-success fw-bold px-3" name="action" value="lock"><i class="bi bi-file-earmark-check me-1"></i> Finalize &amp; Lock Day</button>
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     </form>
   </div>
   {% endif %}
+
+  <!-- SHIFT CLOSE CHECKPOINTS: immutable snapshots; day lock is the final close -->
+  <div class="dr-card p-3 mb-3" style="border-color:#bfdbfe;background:#f8fbff;">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+      <div>
+        <div class="fw-bold text-primary"><i class="bi bi-arrow-left-right me-1"></i> SHIFT CLOSE &amp; HANDOVER</div>
+        <div class="small text-muted mt-1">Before each handover, update the counted balance for every account, then save a named shift snapshot. Each shift's expected close uses ledger movements since the prior handover (or day opening). The day stays open for the next shift; finalize it only after the last shift.</div>
+      </div>
+      <form method="POST" action="{{ dr_post_action }}" class="d-flex flex-wrap align-items-end gap-2" {% if dr.day_lock %}aria-disabled="true"{% endif %}>
+        <input type="hidden" name="action" value="close_shift">
+        <input type="hidden" name="day" value="{{ dr.day_str }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        {% if dr.embed %}<input type="hidden" name="return_to" value="{{ dr_return_to }}">{% endif %}
+        <div><label class="form-label small fw-semibold mb-1" for="drShiftName">Shift name</label>
+          <input id="drShiftName" name="shift_name" class="form-control form-control-sm" maxlength="80" placeholder="Morning / Evening" required {% if dr.day_lock %}disabled{% endif %}>
+        </div>
+        <div><label class="form-label small fw-semibold mb-1" for="drShiftNote">Handover note (optional)</label>
+          <input id="drShiftNote" name="shift_note" class="form-control form-control-sm" maxlength="500" placeholder="Short / excess / handover details" style="min-width:220px;" {% if dr.day_lock %}disabled{% endif %}>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm fw-bold" {% if dr.day_lock or not dr.positions %}disabled{% endif %} onclick="return confirm('Record this shift close? Every active account must have a counted balance. The record is permanent; the day remains open.');"><i class="bi bi-check2-square me-1"></i> Record Shift Close</button>
+      </form>
+    </div>
+    {% if dr.shift_closes %}
+    <div class="table-responsive mt-3">
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Shift</th><th>Closed by</th><th>Closed at</th><th class="text-end">Expected</th><th class="text-end">Counted</th><th class="text-end">Difference</th><th>Handover note</th><th>Snapshot</th></tr></thead>
+        <tbody>
+          {% for close in dr.shift_closes %}
+          <tr>
+            <td class="fw-bold">{{ close.shift_name }}</td>
+            <td>{{ close.closed_by or '—' }}</td>
+            <td class="text-nowrap">{{ close.closed_at.strftime('%Y-%m-%d %H:%M') if close.closed_at else '—' }}</td>
+            <td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(close.total_expected or 0) }}</td>
+            <td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(close.total_counted or 0) }}</td>
+            <td class="text-end dr-mono fw-bold {% if close.difference == 0 %}text-success{% else %}text-danger{% endif %}">Rs. {{ "{:,.2f}".format(close.difference or 0) }}</td>
+            <td>{{ close.note or '—' }}</td>
+            <td><details><summary class="small text-primary" style="cursor:pointer;">Account details</summary>
+              <div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Account</th><th class="text-end">Shift opening</th><th class="text-end">In</th><th class="text-end">Out</th><th class="text-end">Expected at handover</th><th class="text-end">Counted</th><th class="text-end">Difference</th></tr></thead><tbody>
+                {% for p in close.positions %}<tr><td>{{ p.account_name }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.opening or 0) }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.amount_in or 0) }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.amount_out or 0) }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.expected_closing or 0) }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.counted or 0) }}</td><td class="text-end dr-mono">Rs. {{ "{:,.2f}".format(p.difference or 0) }}</td></tr>{% endfor %}
+              </tbody></table></div>
+            </details></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<div class="small text-muted mt-3">No shift close checkpoints recorded for this day.</div>{% endif %}
+  </div>
 
   <!-- KPI TILES -->
   <div class="row g-3 mb-3">

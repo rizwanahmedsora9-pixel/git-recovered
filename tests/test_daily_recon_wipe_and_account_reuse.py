@@ -237,7 +237,10 @@ def test_preview_counts_board_rows_under_accounts(app):
 
         daily = _wipe_preview_for_targets(["daily_reconciliation"])
         daily_tables = set(daily["affected_tables"])
-        assert daily_tables == {"cash_day_account_position", "cash_day_lock"}
+        assert daily_tables == {
+            "cash_day_account_position", "cash_day_lock",
+            "cash_day_shift_close", "cash_day_shift_close_position",
+        }
 
 
 def test_ledger_wipe_rebuilds_cached_account_balances(client, app):

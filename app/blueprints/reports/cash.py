@@ -1014,6 +1014,7 @@ def _dr_build_context(day_value, embed=False):
 
     positions = recon.account_positions_for_date(day_str)
     day_lock = recon.get_day_lock(day_str)
+    shift_closes = recon.shift_closes_for_date(day_str)
     total_expected = _money_round(sum(p['expected_closing'] for p in positions))
     counted_positions = [p for p in positions if p['effective_counted'] is not None]
     counted_values = [p['effective_counted'] for p in counted_positions]
@@ -1039,6 +1040,8 @@ def _dr_build_context(day_value, embed=False):
         next_str=next_str,
         positions=positions,
         day_lock=day_lock,
+        shift_closes=shift_closes,
+        latest_shift_close=shift_closes[0] if shift_closes else None,
         total_expected=total_expected,
         total_counted=total_counted,
         expected_counted=expected_counted,
@@ -1112,9 +1115,21 @@ def daily_reconciliation():
                 )
                 message = 'Counted balance saved.'
                 status = 'success'
+            elif action == 'close_shift':
+                shift_close = recon.close_shift(
+                    day_str,
+                    request.form.get('shift_name'),
+                    actor=current_user,
+                    note=request.form.get('shift_note') or '',
+                )
+                message = (
+                    f'Shift “{shift_close.shift_name}” closed and recorded. '
+                    'The day remains open for the next shift.'
+                )
+                status = 'success'
             elif action == 'lock':
                 recon.lock_day(day_str, actor=current_user, note=request.form.get('note') or '')
-                message = f'Day {day_str} verified & locked. Locked totals become the next day opening.'
+                message = f'Day {day_str} finalized and locked. Locked totals become the next day opening.'
                 status = 'success'
             elif action == 'unlock':
                 recon.unlock_day(day_str)

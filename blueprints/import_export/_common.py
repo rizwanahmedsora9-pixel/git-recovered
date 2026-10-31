@@ -184,7 +184,9 @@ EXPORT_MODULES = {
             'cash_flow_entry', 'cash_flow_entry_audit', 'cash_flow_category',
             'cash_flow_subcategory', 'cash_flow_party',
             'account_reconciliation', 'cash_flow_difference_adjustment',
-            'cash_flow_reconciliation_audit',
+            'cash_flow_reconciliation_audit', 'cash_day_lock',
+            'cash_day_account_position', 'cash_day_shift_close',
+            'cash_day_shift_close_position',
         ],
     },
     'rentals': {

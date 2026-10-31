@@ -105,11 +105,12 @@ def purge_daily_reconciliation_state(session=None):
     """Erase the persisted Daily Cash & Bank Reconciliation board state.
 
     The board's EXPECTED figures are always derived from the accounts and their
-    ledger, but the *stored* inputs — physically counted amounts, verified day
-    locks and their frozen totals — live in ``cash_day_account_position`` and
-    ``cash_day_lock``.  Those two tables were never part of any wipe, and they
-    are keyed by a numeric account id, which SQLite reuses after a delete.  A
-    wipe that left them behind therefore made the old figures reappear against
+    ledger, but the *stored* inputs — physically counted amounts, immutable
+    shift-close snapshots, verified day locks and their frozen totals — live in
+    the cash-day reconciliation tables. They must be cleared together during
+    a financial wipe because they are not foreign-key-linked to accounts and
+    account ids can be reused after deletion. A wipe that left them behind
+    therefore made the old figures reappear against
     the freshly entered accounts (looking hard-coded).
 
     Returns ``(positions_deleted, locks_deleted)``.
@@ -117,6 +118,13 @@ def purge_daily_reconciliation_state(session=None):
     s = session or db.session
     positions = 0
     locks = 0
+    try:
+        s.query(CashDayShiftClosePosition).delete(synchronize_session=False)
+        s.query(CashDayShiftClose).delete(synchronize_session=False)
+    except Exception:
+        logging.getLogger('wipe').warning(
+            'Daily reconciliation shift-close purge skipped', exc_info=True
+        )
     try:
         positions = int(s.query(CashDayAccountPosition).delete(synchronize_session=False) or 0)
     except Exception:
@@ -457,7 +465,7 @@ def _wipe_dataset_preview_map():
         'invoices': {'label': 'Invoices', 'tables': ['invoice'], 'queries': [('invoice', q(Invoice))]},
         'payments': {'label': 'Payments', 'tables': ['payment', 'waive_off', 'pending_bill'], 'queries': [('payment', q(Payment)), ('waive_off', q(WaiveOff))]},
         'bookings': {'label': 'Bookings', 'tables': ['booking_item', 'booking', 'pending_bill'], 'queries': [('booking_item', q(BookingItem)), ('booking', q(Booking))]},
-        'accounts': {'label': 'Financial Accounts', 'tables': ['account', 'account_transaction', 'account_reconciliation', 'fbm_cash_drawer_entry', 'fbm_cash_drawer_category', 'cash_flow_entry', 'cash_flow_entry_audit', 'cash_flow_difference_adjustment', 'cash_flow_reconciliation_audit', 'cash_day_account_position', 'cash_day_lock'], 'queries': [('account', q(Account)), ('account_transaction', q(AccountTransaction)), ('account_reconciliation', q(AccountReconciliation)), ('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock)), ('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
+        'accounts': {'label': 'Financial Accounts', 'tables': ['account', 'account_transaction', 'account_reconciliation', 'fbm_cash_drawer_entry', 'fbm_cash_drawer_category', 'cash_flow_entry', 'cash_flow_entry_audit', 'cash_flow_difference_adjustment', 'cash_flow_reconciliation_audit', 'cash_day_shift_close_position', 'cash_day_shift_close', 'cash_day_account_position', 'cash_day_lock'], 'queries': [('account', q(Account)), ('account_transaction', q(AccountTransaction)), ('account_reconciliation', q(AccountReconciliation)), ('cash_day_shift_close_position', q(CashDayShiftClosePosition)), ('cash_day_shift_close', q(CashDayShiftClose)), ('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock)), ('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
         'account_categories': {'label': 'Account Categories', 'tables': ['account_category'], 'queries': [('account_category', q(AccountCategory))]},
         'cash_drawer_entries': {'label': 'Cash Drawer Entries', 'tables': ['fbm_cash_drawer_entry'], 'queries': [('fbm_cash_drawer_entry', q(FbmCashDrawerEntry))]},
         'cash_drawer_categories': {'label': 'Cash Drawer Categories', 'tables': ['fbm_cash_drawer_category'], 'queries': [('fbm_cash_drawer_category', q(FbmCashDrawerCategory))]},
@@ -465,7 +473,7 @@ def _wipe_dataset_preview_map():
         'account_reconciliations': {'label': 'Account Reconciliations', 'tables': ['account_reconciliation'], 'queries': [('account_reconciliation', q(AccountReconciliation))]},
         'cash_flow_entries': {'label': 'Cash Flow Entries', 'tables': ['cash_flow_entry', 'cash_flow_entry_audit'], 'queries': [('cash_flow_entry', q(CashFlowEntry)), ('cash_flow_entry_audit', q(CashFlowEntryAudit))]},
         'cash_flow_categories': {'label': 'Cash Flow Categories & Parties', 'tables': ['cash_flow_category', 'cash_flow_subcategory', 'cash_flow_party'], 'queries': [('cash_flow_category', q(CashFlowCategory)), ('cash_flow_subcategory', q(CashFlowSubcategory)), ('cash_flow_party', q(CashFlowParty))]},
-        'daily_reconciliation': {'label': 'Daily Reconciliation Counts & Locks', 'tables': ['cash_day_account_position', 'cash_day_lock'], 'queries': [('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock))]},
+        'daily_reconciliation': {'label': 'Daily & Shift Reconciliation', 'tables': ['cash_day_shift_close_position', 'cash_day_shift_close', 'cash_day_account_position', 'cash_day_lock'], 'queries': [('cash_day_shift_close_position', q(CashDayShiftClosePosition)), ('cash_day_shift_close', q(CashDayShiftClose)), ('cash_day_account_position', q(CashDayAccountPosition)), ('cash_day_lock', q(CashDayLock))]},
         'cash_reconciliation_data': {'label': 'Cash Reconciliation Data', 'tables': ['cash_flow_difference_adjustment'], 'queries': [('cash_flow_difference_adjustment', q(CashFlowDifferenceAdjustment))]},
         'cash_reconciliation_audit': {'label': 'Cash Audit Trail', 'tables': ['cash_flow_reconciliation_audit'], 'queries': [('cash_flow_reconciliation_audit', q(CashFlowReconciliationAudit))]},
         'delivery_person_payments': {'label': 'Driver Payments', 'tables': ['delivery_person_payment'], 'queries': [('delivery_person_payment', q(DeliveryPersonPayment))]},
