@@ -507,136 +507,225 @@ function submitCancelSelection{{ client.id }}() {
 </div><!-- /ledgerPane -->
 
 <!-- ============================ Material Analysis ============================
-     Client's billed ledger lines only (bookings + direct sales).  Two report
-     options: category-wise and material-wise, each with grand totals. -->
+     New, unique tab on the Client Ledger page.  Every figure below is built
+     from THIS client's own booked / direct-sale ledger lines only (see
+     build_client_material_analysis).  Two report options — category-wise and
+     material-wise — each with its own totals and a grand total.
+     ------------------------------------------------------------------------ -->
 <div class="tab-pane fade" id="materialAnalysisPane" role="tabpanel" aria-labelledby="material-analysis-tab">
-    <div class="card border-0 shadow-sm mb-4" style="background: #1e293b; border: 2px solid #475569 !important; border-radius: 15px; overflow: hidden;">
-        <div class="card-header border-bottom border-secondary py-3 d-flex justify-content-between align-items-center flex-wrap gap-2" style="background: #0f172a;">
-            <h5 class="mb-0 text-warning fw-bold"><i class="bi bi-pie-chart me-2"></i>Material Analysis</h5>
-            <span class="badge bg-dark border border-secondary text-info">
-                Client: {{ client.code or 'N/A' }} - {{ client.name }}
-            </span>
-        </div>
-        <div class="card-body">
-            <p class="text-white-50 small mb-3">
-                Based on this client's booked and direct-sale bill lines. Rental charges are
-                service / rent lines (e.g. <code>RENT-...</code>), recognised with the same rule
-                used by the sale form and the P&amp;L.
-            </p>
 
-            <!-- Report option toggle -->
-            <ul class="nav nav-pills mb-4 d-print-none" role="group">
-                <li class="nav-item">
-                    <button class="nav-link active bg-info text-dark fw-bold" type="button" data-ma-report="category">
-                        <i class="bi bi-folder2-open me-1"></i>Category-Wise Report
-                    </button>
-                </li>
-                <li class="nav-item">
-                    <button class="nav-link" type="button" data-ma-report="material">
-                        <i class="bi bi-box-seam me-1"></i>Material-Wise Report
-                    </button>
-                </li>
-            </ul>
-
-            <!-- ---------- Option 1: Category-Wise Report ---------- -->
-            <div id="maCategoryReport">
-                <h6 class="text-info fw-bold mb-2"><i class="bi bi-folder2-open me-1"></i>Category-Wise Report</h6>
-                <div class="table-responsive">
-                    <table class="table table-dark table-hover align-middle mb-0 material-analysis-table">
-                        <thead style="background: #020617;">
-                            <tr>
-                                <th class="ps-3">Category</th>
-                                <th class="text-end">Total Quantity</th>
-                                <th class="text-end">Total Payment</th>
-                                <th class="text-end pe-3">Rental Charges</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in category_rows %}
-                            <tr style="border-bottom: 1px solid #334155;">
-                                <td class="ps-3 fw-bold">{{ row.category }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.2f}".format(row.payment) }}</td>
-                                <td class="text-end pe-3 ma-qty {% if row.rent > 0 %}text-warning fw-bold{% endif %}">{{ "{:,.2f}".format(row.rent) }}</td>
-                            </tr>
-                            {% else %}
-                            <tr><td colspan="4" class="p-5 text-center text-white-50">No material ledger data found for this client.</td></tr>
-                            {% endfor %}
-                            <tr class="ma-grand-row">
-                                <td class="ps-3">Grand Total</td>
-                                <td class="text-end ma-qty">{{ "{:,.3f}".format(category_grand.qty).rstrip('0').rstrip('.') }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.2f}".format(category_grand.payment) }}</td>
-                                <td class="text-end pe-3 ma-qty">{{ "{:,.2f}".format(category_grand.rent) }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+    <!-- ------------------------------ KPI strip -------------------------- -->
+    <div class="row g-3 mb-4 ma-kpi-row">
+        <div class="col-6 col-lg">
+            <div class="ma-kpi">
+                <div class="ma-kpi-label"><i class="bi bi-tags me-1"></i>Categories</div>
+                <div class="ma-kpi-value">{{ category_grand.categories }}</div>
             </div>
-
-            <!-- ---------- Option 2: Material-Wise Report ---------- -->
-            <div id="maMaterialReport" style="display: none;">
-                <h6 class="text-info fw-bold mb-2"><i class="bi bi-box-seam me-1"></i>Material-Wise Report</h6>
-                <div class="table-responsive">
-                    <table class="table table-dark table-hover align-middle mb-0 material-analysis-table">
-                        <thead style="background: #020617;">
-                            <tr>
-                                <th class="ps-3">Material</th>
-                                <th>Category</th>
-                                <th class="text-end">Total Quantity</th>
-                                <th class="text-end">Total Amount</th>
-                                <th class="text-end pe-3">Rental Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in material_rows %}
-                            <tr style="border-bottom: 1px solid #334155;">
-                                <td class="ps-3 fw-bold">
-                                    {{ row.material }}
-                                    {% if row.code %}<span class="badge bg-dark border border-secondary text-white-50 fw-normal">{{ row.code }}</span>{% endif %}
-                                </td>
-                                <td>{{ row.category }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.2f}".format(row.amount) }}</td>
-                                <td class="text-end pe-3 ma-qty {% if row.rent > 0 %}text-warning fw-bold{% endif %}">{{ "{:,.2f}".format(row.rent) }}</td>
-                            </tr>
-                            {% else %}
-                            <tr><td colspan="5" class="p-5 text-center text-white-50">No material ledger data found for this client.</td></tr>
-                            {% endfor %}
-                            <tr class="ma-grand-row">
-                                <td class="ps-3">Grand Total</td>
-                                <td></td>
-                                <td class="text-end ma-qty">{{ "{:,.3f}".format(material_grand.qty).rstrip('0').rstrip('.') }}</td>
-                                <td class="text-end ma-qty">{{ "{:,.2f}".format(material_grand.amount) }}</td>
-                                <td class="text-end pe-3 ma-qty">{{ "{:,.2f}".format(material_grand.rent) }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+        </div>
+        <div class="col-6 col-lg">
+            <div class="ma-kpi">
+                <div class="ma-kpi-label"><i class="bi bi-box-seam me-1"></i>Materials</div>
+                <div class="ma-kpi-value">{{ material_grand.materials }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg">
+            <div class="ma-kpi">
+                <div class="ma-kpi-label"><i class="bi bi-123 me-1"></i>Total Quantity</div>
+                <div class="ma-kpi-value">{{ "{:,.3f}".format(material_grand.qty).rstrip('0').rstrip('.') }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg">
+            <div class="ma-kpi">
+                <div class="ma-kpi-label"><i class="bi bi-cash-stack me-1"></i>Billed Amount</div>
+                <div class="ma-kpi-value">Rs {{ "{:,.2f}".format(material_grand.amount) }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg">
+            <div class="ma-kpi">
+                <div class="ma-kpi-label"><i class="bi bi-truck me-1"></i>Rental Charges</div>
+                <div class="ma-kpi-value text-warning">Rs {{ "{:,.2f}".format(material_grand.rent) }}</div>
             </div>
         </div>
     </div>
+
+    <!-- ---------------------- Report selection (2 options) ---------------- -->
+    <div class="ma-switch-wrap mb-3">
+        <ul class="nav nav-pills ma-switch d-print-none" role="group" aria-label="Material Analysis report options">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" type="button" data-ma-report="category" aria-pressed="true">
+                    <i class="bi bi-folder2-open me-1"></i>Category-Wise Report
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" type="button" data-ma-report="material" aria-pressed="false">
+                    <i class="bi bi-box-seam me-1"></i>Material-Wise Report
+                </button>
+            </li>
+        </ul>
+        <div class="ma-switch-meta small text-white-50 d-print-none">
+            <span class="me-3"><i class="bi bi-person-badge me-1"></i>Client: {{ client.code or 'N/A' }} &mdash; {{ client.name }}</span>
+            <button type="button" class="btn btn-sm btn-outline-light" id="maPrintBtn">
+                <i class="bi bi-printer me-1"></i>Print report
+            </button>
+        </div>
+    </div>
+    <p class="small text-white-50 mb-4">
+        <i class="bi bi-info-circle me-1"></i>
+        Based on this client's booked and direct-sale bill lines. A line is valued at
+        <span class="text-info">quantity &times; rate &minus; line discount</span>; rental charges are
+        rent / service lines, recognised with the same rule used by the sale form and the P&amp;L.
+    </p>
+
+    <!-- ================== Option 1: Category-Wise Report ================== -->
+    <section id="maCategoryReport" class="ma-report" aria-label="Category-Wise Report">
+        <div class="ma-report-head">
+            <h6 class="ma-report-title"><i class="bi bi-folder2-open me-1"></i>Category-Wise Report</h6>
+            <span class="ma-report-count">{{ category_grand.categories }} categor{{ 'y' if category_grand.categories == 1 else 'ies' }} &middot; {{ material_grand.materials }} materials</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-dark align-middle mb-0 material-analysis-table table-stack-cards">
+                <thead>
+                    <tr>
+                        <th class="ps-3">Category</th>
+                        <th class="text-end">Materials</th>
+                        <th class="text-end">Total Quantity</th>
+                        <th class="text-end">Total Payment</th>
+                        <th class="text-end">Rental Charges</th>
+                        <th class="text-end pe-3">Share of Billed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in category_rows %}
+                    <tr>
+                        <td class="ps-3" data-label="Category">
+                            <span class="ma-cat-name">{{ row.category }}</span>
+                        </td>
+                        <td class="text-end ma-num" data-label="Materials">{{ row.materials }}</td>
+                        <td class="text-end ma-num" data-label="Total Quantity">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
+                        <td class="text-end ma-num fw-bold" data-label="Total Payment">{{ "{:,.2f}".format(row.payment) }}</td>
+                        <td class="text-end ma-num {% if row.rent > 0 %}text-warning fw-bold{% else %}text-white-50{% endif %}" data-label="Rental Charges">{{ "{:,.2f}".format(row.rent) }}</td>
+                        <td class="text-end pe-3" data-label="Share of Billed">
+                            <div class="ma-share">
+                                <span class="ma-share-bar"><span style="width: {{ row.share }}%;"></span></span>
+                                <span class="ma-share-val">{{ "{:,.1f}".format(row.share) }}%</span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="ma-empty">
+                            <i class="bi bi-inbox me-2"></i>No billed material lines found for this client yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="ma-grand-row">
+                        <td class="ps-3" data-label="Grand Total">Grand Total</td>
+                        <td class="text-end ma-num" data-label="Materials">{{ category_grand.materials }}</td>
+                        <td class="text-end ma-num" data-label="Total Quantity">{{ "{:,.3f}".format(category_grand.qty).rstrip('0').rstrip('.') }}</td>
+                        <td class="text-end ma-num" data-label="Total Payment">{{ "{:,.2f}".format(category_grand.payment) }}</td>
+                        <td class="text-end ma-num" data-label="Rental Charges">{{ "{:,.2f}".format(category_grand.rent) }}</td>
+                        <td class="text-end pe-3 ma-num" data-label="Share of Billed">{% if category_grand.payment %}100.0%{% else %}0.0%{% endif %}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </section>
+
+    <!-- ================== Option 2: Material-Wise Report ================== -->
+    <section id="maMaterialReport" class="ma-report" aria-label="Material-Wise Report" style="display: none;">
+        <div class="ma-report-head">
+            <h6 class="ma-report-title"><i class="bi bi-box-seam me-1"></i>Material-Wise Report</h6>
+            <span class="ma-report-count">{{ material_grand.materials }} material{{ '' if material_grand.materials == 1 else 's' }} &middot; {{ material_grand.lines }} billed lines</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-dark align-middle mb-0 material-analysis-table table-stack-cards">
+                <thead>
+                    <tr>
+                        <th class="ps-3 ma-col-index">#</th>
+                        <th>Material</th>
+                        <th>Category</th>
+                        <th class="text-end">Total Quantity</th>
+                        <th class="text-end">Total Amount</th>
+                        <th class="text-end pe-3">Rental Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in material_rows %}
+                    <tr>
+                        <td class="ps-3 ma-col-index stack-no-label" data-label="">{{ loop.index }}</td>
+                        <td data-label="Material">
+                            <span class="ma-mat-name">{{ row.material }}</span>
+                            {% if row.code %}<span class="ma-mat-code">{{ row.code }}</span>{% endif %}
+                            {% if row.unit %}<span class="ma-mat-unit">{{ row.unit }}</span>{% endif %}
+                        </td>
+                        <td data-label="Category">
+                            <span class="ma-cat-chip">{{ row.category }}</span>
+                        </td>
+                        <td class="text-end ma-num" data-label="Total Quantity">{{ "{:,.3f}".format(row.qty).rstrip('0').rstrip('.') }}</td>
+                        <td class="text-end ma-num fw-bold" data-label="Total Amount">{{ "{:,.2f}".format(row.amount) }}</td>
+                        <td class="text-end pe-3 ma-num {% if row.rent > 0 %}text-warning fw-bold{% else %}text-white-50{% endif %}" data-label="Rental Amount">{{ "{:,.2f}".format(row.rent) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="ma-empty">
+                            <i class="bi bi-inbox me-2"></i>No billed material lines found for this client yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="ma-grand-row">
+                        <td class="ps-3" data-label="" colspan="3">Grand Total</td>
+                        <td class="text-end ma-num" data-label="Total Quantity">{{ "{:,.3f}".format(material_grand.qty).rstrip('0').rstrip('.') }}</td>
+                        <td class="text-end ma-num" data-label="Total Amount">{{ "{:,.2f}".format(material_grand.amount) }}</td>
+                        <td class="text-end pe-3 ma-num" data-label="Rental Amount">{{ "{:,.2f}".format(material_grand.rent) }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </section>
+
 </div><!-- /materialAnalysisPane -->
+
 
 </div><!-- /tab-content -->
 
 <script>
 // Material Analysis: switch between the two report options.
-document.querySelectorAll('[data-ma-report]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-        var report = this.getAttribute('data-ma-report');
-        document.querySelectorAll('[data-ma-report]').forEach(function (b) {
-            var on = (b === btn);
-            b.classList.toggle('active', on);
-            b.classList.toggle('bg-info', on);
-            b.classList.toggle('text-dark', on);
-            b.classList.toggle('fw-bold', on);
+// (Plain JS, no Bootstrap tab dependency — the tab itself stays the only
+// Bootstrap tab on the page.)
+(function () {
+    var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-ma-report]'));
+    if (!buttons.length) return;
+
+    function showReport(report) {
+        buttons.forEach(function (btn) {
+            var on = btn.getAttribute('data-ma-report') === report;
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
-        var cat = document.getElementById('maCategoryReport');
-        var mat = document.getElementById('maMaterialReport');
-        if (cat) cat.style.display = (report === 'category') ? '' : 'none';
-        if (mat) mat.style.display = (report === 'material') ? '' : 'none';
+        var panes = {
+            category: document.getElementById('maCategoryReport'),
+            material: document.getElementById('maMaterialReport')
+        };
+        Object.keys(panes).forEach(function (key) {
+            if (panes[key]) panes[key].style.display = (key === report) ? '' : 'none';
+        });
+    }
+
+    buttons.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            showReport(btn.getAttribute('data-ma-report'));
+        });
     });
-});
+
+    var printBtn = document.getElementById('maPrintBtn');
+    if (printBtn) {
+        printBtn.addEventListener('click', function () { window.print(); });
+    }
+})();
 </script>
 
 <!-- Edit Modals for Transaction Types -->
@@ -1053,24 +1142,216 @@ document.querySelectorAll('[data-ma-report]').forEach(function (btn) {
     }
 }
 
-/* Material Analysis tab */
+
+/* ---------- Material Analysis tab (Client Ledger) ------------------------
+   Self-contained styles: nothing outside this tab is affected. */
+.ma-kpi {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 0.8rem 1rem;
+    height: 100%;
+}
+.ma-kpi-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ma-kpi-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ma-switch-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.ma-switch {
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+.ma-switch .nav-link {
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #cbd5e1;
+    font-weight: 600;
+    font-size: 0.88rem;
+    padding: 0.45rem 0.85rem;
+    border-radius: 999px;
+}
+.ma-switch .nav-link:hover {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-color: #475569;
+}
+.ma-switch .nav-link.active {
+    background: #0dcaf0;
+    border-color: #0dcaf0;
+    color: #062028;
+    font-weight: 700;
+}
+.ma-switch-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.ma-report-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+}
+.ma-report-title {
+    margin: 0;
+    color: #7dd3fc;
+    font-weight: 700;
+    font-size: 0.86rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.ma-report-count {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    font-variant-numeric: tabular-nums;
+}
+.material-analysis-table {
+    border: 1px solid #334155;
+    border-radius: 12px;
+    overflow: hidden;
+}
 .material-analysis-table thead th {
     background: #020617 !important;
+    color: #94a3b8 !important;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    border-bottom: 1px solid #475569;
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
 }
 .material-analysis-table tbody tr {
     border-bottom: 1px solid #334155;
 }
+.material-analysis-table tbody tr:last-child {
+    border-bottom: 0;
+}
+.material-analysis-table tbody tr:hover {
+    background: #243244;
+}
+.material-analysis-table > tbody > tr:hover > td {
+    background: #243244 !important;
+}
+.material-analysis-table tbody td {
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+    color: #e2e8f0;
+}
+.material-analysis-table tfoot td,
 .material-analysis-table tr.ma-grand-row td {
-    background: #0f172a;
+    background: #0f172a !important;
     border-top: 2px solid #475569;
     color: #fbbf24;
     font-weight: 700;
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
 }
-.material-analysis-table .ma-qty {
+.material-analysis-table .ma-num {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
-/* Print: show only the active tab pane, hide the tab/pill chrome. */
+.ma-cat-name,
+.ma-mat-name {
+    font-weight: 700;
+    color: #f1f5f9;
+}
+.ma-mat-code {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.02rem 0.45rem;
+    border: 1px solid #334155;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    color: #94a3b8;
+    background: #020617;
+    vertical-align: middle;
+}
+.ma-mat-unit {
+    display: inline-block;
+    margin-left: 0.35rem;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    vertical-align: middle;
+}
+.ma-cat-chip {
+    display: inline-block;
+    padding: 0.08rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #cbd5e1;
+    white-space: nowrap;
+}
+.ma-col-index {
+    width: 3rem;
+    color: #94a3b8 !important;
+    font-variant-numeric: tabular-nums;
+}
+.ma-share {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.45rem;
+}
+.ma-share-bar {
+    display: inline-block;
+    width: 62px;
+    height: 6px;
+    border-radius: 999px;
+    background: #334155;
+    overflow: hidden;
+}
+.ma-share-bar > span {
+    display: block;
+    height: 100%;
+    background: #22d3ee;
+    border-radius: 999px;
+}
+.ma-share-val {
+    min-width: 44px;
+    text-align: right;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    font-variant-numeric: tabular-nums;
+}
+.ma-empty {
+    padding: 2.5rem 1rem !important;
+    text-align: center;
+    color: #94a3b8 !important;
+}
+@media (max-width: 575.98px) {
+    .ma-share-bar { display: none; }
+    .ma-kpi-value { font-size: 1.05rem; }
+}
+/* Print: show only the active tab pane, hide the tab / pill chrome. */
 @media print {
     .nav-tabs,
     .nav-pills {
@@ -1082,6 +1363,39 @@ document.querySelectorAll('[data-ma-report]').forEach(function (btn) {
     .tab-pane.active,
     .tab-pane.show {
         display: block !important;
+    }
+    .ma-kpi {
+        border: 1px solid #999 !important;
+        background: #fff !important;
+    }
+    .ma-kpi-label,
+    .ma-kpi-value {
+        color: #000 !important;
+    }
+    .ma-report-title,
+    .ma-report-count,
+    .ma-cat-name,
+    .ma-mat-name {
+        color: #000 !important;
+    }
+    .material-analysis-table thead th {
+        background: #fff !important;
+        color: #000 !important;
+    }
+    .material-analysis-table tfoot td,
+    .material-analysis-table tr.ma-grand-row td {
+        background: #fff !important;
+        color: #000 !important;
+    }
+    .ma-cat-chip,
+    .ma-mat-code {
+        border-color: #999 !important;
+        background: #fff !important;
+        color: #000 !important;
+    }
+    .ma-switch-wrap,
+    .ma-switch-meta {
+        display: none !important;
     }
 }
 </style>
