@@ -40,10 +40,23 @@ from flask import current_app
 
 from models import db
 from app.services import state
+from app.services.constants import _ENABLE_BACKGROUND_WORKERS
 from app.services.maintenance import _sqlite_path
 from app.services.time_money import PK_TZ, pk_now
 
 LOG = logging.getLogger("daily-backup")
+
+
+def _background_workers_enabled() -> bool:
+    """True only in a process that was started to run scheduled work.
+
+    Re-read from the environment so a test or an operator can flip it without
+    reimporting the module.
+    """
+    override = (os.environ.get("AMS_ENABLE_BACKGROUND_WORKERS") or "").strip().lower()
+    if override:
+        return override in ("1", "true", "yes", "on")
+    return bool(_ENABLE_BACKGROUND_WORKERS)
 
 # Keep in sync with app.migrations (these tables must exist in any real backup).
 _PROBE_TABLES = ("user", "client", "settings")
@@ -721,6 +734,12 @@ def start_daily_backup_scheduler(app) -> bool:
     ``tools/maintenance.py backup-daily``.
     """
     global _worker_started
+    # Never schedule from a web/WSGI worker: the copy is taken from the live
+    # database and polls the write lock.  ``wsgi.py`` leaves
+    # AMS_ENABLE_BACKGROUND_WORKERS unset; cron runs the backup explicitly via
+    # ``tools/maintenance.py backup-daily``.
+    if not _background_workers_enabled():
+        return False
     if app.config.get("TESTING") or not app.config.get("DAILY_BACKUP_SCHEDULER", True):
         return False
     with _worker_guard:

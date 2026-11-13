@@ -51,6 +51,7 @@ def register_hooks(app):
     from app.services.permissions import _user_can
     from app.services.constants import (
         _AUTO_BACKUP_ENABLED,
+        _ENABLE_BACKGROUND_WORKERS,
         BLUEPRINT_PERMISSION_PREFIXES,
         ENDPOINT_PERMISSION_MAP,
     )
@@ -242,6 +243,15 @@ def register_hooks(app):
 
     @app.before_request
     def _ensure_background_workers_started():
+        # A web/WSGI worker must never start scheduled work: the database copy,
+        # the reconcile pass and the backup poll all compete with the shop for
+        # the SQLite write lock, and the reconcile pass rewrites balances.  These
+        # threads belong to an explicit background process (cron -> tools/
+        # maintenance.py) or a local dev server started with
+        # AMS_ENABLE_BACKGROUND_WORKERS=1.  ``wsgi.py`` never sets that flag, so
+        # this hook is a no-op on the deployed site.
+        if not _ENABLE_BACKGROUND_WORKERS:
+            return
         if _AUTO_BACKUP_ENABLED:
             _start_hourly_backup_worker()
         _start_reconcile_worker()

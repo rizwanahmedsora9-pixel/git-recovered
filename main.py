@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import os
 
+# The local development server is the one web process that is allowed to run the
+# scheduled maintenance/reconcile threads (a deployed WSGI worker is not -- see
+# wsgi.py).  Set before the app factory is imported.
+os.environ.setdefault("AMS_ENABLE_BACKGROUND_WORKERS", "1")
+
 from app import create_app
 
 # The WSGI application (tools and external loaders import ``app``).

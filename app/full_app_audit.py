@@ -116,6 +116,7 @@ DRIVER_PAYMENT = dict(amount=1000.0, method="Cash", account="Main Cash",
                       note="part driver settlement", idem="cyc-drv-1")
 
 CF_ENTRY = dict(direction="in", amount=5000.0, account="Main Cash",
+                category="Owner Capital",
                 description="Owner put cash in", date="2026-10-23",
                 reference="CYC-CF-IN", idem="cyc-cf-in")
 
@@ -128,6 +129,7 @@ PENDING_BILL = dict(client="CYC-CL-1", bill="CYC-PB-1", amount=4500.0,
 PERIOD = dict(start="2026-10-01", end="2026-10-31")
 
 EXPECT = {
+    # DG Cement: 100 + 50 + 80 received - 35 dispatched + 2 returned = 197.
     "cash_closing": 175_500.0,
     "bank_closing": 483_000.0,
     "company_total": 658_500.0,
@@ -319,6 +321,10 @@ def seed(session, db):
     print(f"  [{'ok ' if ok else 'FAIL'}] driver {DRIVER['name']} — {txt}")
     ctx["driver_id"] = db.scalar("select id from delivery_person where name=?",
                                  (DRIVER["name"],))
+    # The GRN step posts against the first supplier it creates; payments must
+    # target that same row (a hard-coded id paid whatever supplier happened to
+    # be #1, which is why the supplier-payment step used to report FAIL).
+    ctx["supplier_id"] = db.scalar("select id from supplier order by id limit 1")
 
     print("\n== accounts ==")
     for acc in (CASH_ACCOUNT, BANK_ACCOUNT):
@@ -340,21 +346,33 @@ def seed(session, db):
         ok, txt = _flash_ok(session, r, "Account added")
         print(f"  [{'ok ' if ok else 'FAIL'}] account {acc['name']} — {txt}")
 
+    # Payments must name the cash/bank account they leave from; without an id
+    # the live routes (correctly) refuse to post.
+    ctx["accounts"] = {row["name"]: row["id"] for row in
+                       db.rows("select id,name from account")}
+
     print("\n== GRNs (stock in) ==")
     for bill, sid, sup_name, date, mat, qty, price in GRNS:
+        # The GRN wizard posts one row per received line (``mat_name[]`` /
+        # ``qty[]`` / ``price[]``).  The old single "material"/"quantity" keys
+        # matched no form field, so no GRN was ever created.
         r = session.post("/grn", {
+            "action": "add",  # the wizard dispatches on the action, not the URL
             "bill_no": bill, "supplier_id": str(sid), "date": date,
-            "material": mat, "quantity": str(qty), "rate": str(price),
+            "mat_name[]": mat, "qty[]": str(qty), "price[]": str(price),
         })
-        ok, txt = _flash_ok(session, r, "GRN")
+        ok, txt = _flash_ok(session, r, "GRN added")
         print(f"  [{'ok ' if ok else 'FAIL'}] GRN {bill} {mat} x{qty} — {txt}")
+
+    ctx["grn_id"] = db.scalar("select id from grn order by id limit 1")
 
     print("\n== bookings ==")
     r = session.post("/add_booking", {
-        "bill_no": BOOKING["bill"], "date": BOOKING["date"],
-        "material": "DG Cement", "quantity": str(BOOKING["qty"]),
-        "rate": str(BOOKING["rate"]), "paid": str(BOOKING["paid"]),
-        "note": BOOKING["note"],
+        "manual_bill_no": BOOKING["bill"], "date": BOOKING["date"],
+        "client_code": CLIENT["code"],
+        "material_name[]": "DG Cement", "qty[]": str(BOOKING["qty"]),
+        "unit_rate[]": str(BOOKING["rate"]),
+        "paid_amount": str(BOOKING["paid"]), "note": BOOKING["note"],
     })
     ok, txt = _flash_ok(session, r, "Booking")
     print(f"  [{'ok ' if ok else 'FAIL'}] booking {BOOKING['bill']} — {txt}")
@@ -362,53 +380,70 @@ def seed(session, db):
     print("\n== direct sales ==")
     for s in SALES:
         payload = {
-            "category": s["category"], "date": s["date"],
-            "material": "DG Cement", "quantity": str(s["qty"]),
-            "rate": str(s["rate"]), "paid": str(s["paid"]),
-            "rent": str(s["rent"]), "bill_no": s["bill"],
-            "client": s.get("client") or "",
+            "category": s["category"], "sale_date": s["date"],
+            "driver_name": DRIVER["name"],
+            "product_name[]": "DG Cement", "qty[]": str(s["qty"]),
+            "unit_rate[]": str(s["rate"]), "paid_amount": str(s["paid"]),
+            "delivery_rent": str(s["rent"]),
+            "manual_bill_no": s["bill"],
+            "client_code": s.get("client") or "",
             "client_name": s.get("client_name") or "",
-            "ignore_booking": s.get("ignore_booking", "1"),
+            "ignore_booking_item[]": "1" if s.get("ignore_booking", "1") == "1" else "",
         }
         r = session.post("/add_direct_sale", payload)
-        ok, txt = _flash_ok(session, r, "Sale")
+        ok, txt = _flash_ok(session, r, "Direct sale added")
         print(f"  [{'ok ' if ok else 'FAIL'}] sale {s['bill']} x{s['qty']} — {txt}")
 
     print("\n== client receipts ==")
     for rcpt in CLIENT_RECEIPTS:
-        r = session.post("/add_client_receipt", {
+        # The live endpoint is the Accounts receipt form; the old
+        # ``/add_client_receipt`` alias no longer exists and silently posted
+        # nothing, so the audit used to "pass" without creating a receipt.
+        r = session.post("/accounts/payments/clients/save", {
             "amount": str(rcpt["amount"]), "method": rcpt["method"],
-            "account": rcpt["account"], "date": rcpt["date"],
-            "bill_no": rcpt["bill"], "note": rcpt["note"],
+            "date": rcpt["date"], "manual_bill_no": rcpt["bill"],
+            "note": rcpt["note"], "payment_type": "Receipt",
+            "client_code": CLIENT["code"],
+            "payment_account_id": str(ctx["accounts"][rcpt["account"]]),
+            "idempotency_key": rcpt["idem"],
         })
-        ok, txt = _flash_ok(session, r, "Receipt")
+        ok, txt = _flash_ok(session, r, "Payment saved successfully")
         print(f"  [{'ok ' if ok else 'FAIL'}] receipt {rcpt['bill']} — {txt}")
 
     print("\n== GRN + supplier + driver payments ==")
-    r = session.post("/grn_payments/add", {
-        "grn_id": "1", "amount": str(GRN_PAYMENT["amount"]),
-        "method": GRN_PAYMENT["method"], "account": GRN_PAYMENT["account"],
-        "date": GRN_PAYMENT["date"], "reference": GRN_PAYMENT["reference"],
+    r = session.post("/accounts/grn_payments/save", {
+        # ``SUPPLIER:<grn id>`` is the lumped "whole supplier bill" key the
+        # Accounts screen posts; it must point at a GRN that really exists.
+        "grn_id": str(ctx["grn_id"]),
+        "obligation_key": f"SUPPLIER:{ctx['grn_id']}",
+        "amount": str(GRN_PAYMENT["amount"]),
+        "mode": "SUPPLIER",
+        "method": GRN_PAYMENT["method"],
+        "payment_account_id": str(ctx["accounts"][GRN_PAYMENT["account"]]),
+        "date_posted": GRN_PAYMENT["date"],
+        "reference": GRN_PAYMENT["reference"],
     })
     print(f"  [{'ok ' if _flash_ok(session, r, 'Payment')[0] else 'FAIL'}] "
           f"GRN payment {GRN_PAYMENT['amount']}")
 
-    r = session.post("/supplier_payments/add", {
-        "supplier_id": str(SUPPLIER_PAYMENT["supplier_id"]),
+    r = session.post("/add_supplier_payment", {
+        "supplier_id": str(ctx.get("supplier_id") or SUPPLIER_PAYMENT["supplier_id"]),
         "amount": str(SUPPLIER_PAYMENT["amount"]),
         "method": SUPPLIER_PAYMENT["method"],
-        "account": SUPPLIER_PAYMENT["account"],
+        "payment_account_id": str(ctx["accounts"][SUPPLIER_PAYMENT["account"]]),
         "date": SUPPLIER_PAYMENT["date"],
-        "bill_no": SUPPLIER_PAYMENT["bill"],
+        "manual_bill_no": SUPPLIER_PAYMENT["bill"],
         "note": SUPPLIER_PAYMENT["note"],
     })
     print(f"  [{'ok ' if _flash_ok(session, r, 'Payment')[0] else 'FAIL'}] "
           f"supplier payment {SUPPLIER_PAYMENT['amount']}")
 
-    r = session.post("/delivery_person_payments/add", {
-        "amount": str(DRIVER_PAYMENT["amount"]),
+    # Driver money now settles through the driver ledger, which posts the
+    # payment against the real driver instead of an unowned "add" URL.
+    r = session.post(f"/delivery_person_ledger/{ctx['driver_id']}/pay", {
+        "paid_amount": str(DRIVER_PAYMENT["amount"]),
         "method": DRIVER_PAYMENT["method"],
-        "account": DRIVER_PAYMENT["account"],
+        "payment_account_id": str(ctx["accounts"][DRIVER_PAYMENT["account"]]),
         "date": DRIVER_PAYMENT["date"],
         "reference": DRIVER_PAYMENT["reference"],
         "note": DRIVER_PAYMENT["note"],
@@ -417,32 +452,42 @@ def seed(session, db):
           f"driver payment {DRIVER_PAYMENT['amount']}")
 
     print("\n== cash flow entry ==")
-    r = session.post("/cash_flow/add", {
+    # The movement needs a cash-flow category (owner capital is the natural
+    # one).  Without it the route correctly refuses the entry, which used to
+    # leave Main Cash 5,000 short of the expected closing balance.
+    session.post("/cash_flow", {
+        "action": "add_category", "new_category_name": CF_ENTRY["category"],
+        "new_category_direction": "in",
+    })
+    r = session.post("/cash_flow", {
+        "action": "record_movement",
         "direction": CF_ENTRY["direction"], "amount": str(CF_ENTRY["amount"]),
-        "account": CF_ENTRY["account"], "date": CF_ENTRY["date"],
+        "movement_date": CF_ENTRY["date"],
+        "cash_account_id": str(ctx["accounts"][CF_ENTRY["account"]]),
+        "category_name": CF_ENTRY["category"],
         "description": CF_ENTRY["description"],
         "reference": CF_ENTRY["reference"],
     })
-    print(f"  [{'ok ' if _flash_ok(session, r, 'added')[0] else 'FAIL'}] "
+    print(f"  [{'ok ' if _flash_ok(session, r, 'recorded')[0] else 'FAIL'}] "
           f"cash flow {CF_ENTRY['amount']}")
 
     print("\n== material return ==")
-    r = session.post("/material_returns/add", {
-        "client": RETURN["client"], "date": RETURN["date"],
-        "material": RETURN["material"], "quantity": str(RETURN["qty"]),
-        "rate": str(RETURN["rate"]), "bill_no": RETURN["bill"],
-        "note": RETURN["note"],
+    r = session.post("/add_material_return", {
+        "client_code": RETURN["client"], "date": RETURN["date"],
+        "material_name[]": RETURN["material"], "qty[]": str(RETURN["qty"]),
+        "unit_rate[]": str(RETURN["rate"]),
+        "manual_bill_no": RETURN["bill"], "note": RETURN["note"],
     })
-    print(f"  [{'ok ' if _flash_ok(session, r, 'Return')[0] else 'FAIL'}] "
+    print(f"  [{'ok ' if _flash_ok(session, r, 'Material return saved')[0] else 'FAIL'}] "
           f"return {RETURN['qty']} {RETURN['material']}")
 
     print("\n== pending bill ==")
-    r = session.post("/pending_bills/add", {
-        "client": PENDING_BILL["client"], "bill_no": PENDING_BILL["bill"],
+    r = session.post("/add_pending_bill", {
+        "client_code": PENDING_BILL["client"], "bill_no": PENDING_BILL["bill"],
         "amount": str(PENDING_BILL["amount"]),
         "reason": PENDING_BILL["reason"],
     })
-    print(f"  [{'ok ' if _flash_ok(session, r, 'Pending')[0] else 'FAIL'}] "
+    print(f"  [{'ok ' if _flash_ok(session, r, 'Pending bill')[0] else 'FAIL'}] "
           f"pending bill {PENDING_BILL['amount']}")
 
     return ctx
@@ -465,13 +510,41 @@ PAGE_LIST = [
 ]
 
 
+_ERROR_PAGE_MARKERS = (
+    "traceback (most recent call last)",
+    "internal server error",
+    "jinja2.exceptions",
+    "sqlalchemy.exc.",
+    "something went wrong while building this page",
+)
+
+
+def _error_page_marker(html):
+    """Return the marker that proves *html* is an error page (or '')."""
+    low = (html or "").lower()
+    for marker in _ERROR_PAGE_MARKERS:
+        if marker in low:
+            return marker
+    return ""
+
+
 def walk_pages(session, R):
     print("\n== page walk (every route renders) ==")
     for path in PAGE_LIST:
+        # ``session.page`` returns ``(status, text)``.  ``/stock_summary`` is a
+        # real route that deliberately redirects to the inventory page, so a
+        # 302 is followed once instead of being reported as a failure.
         status, text = session.page(path)
-        ok = status in (200, 302)
+        if status in (301, 302, 303, 307, 308):
+            # ``session.page`` reads without following; re-request with
+            # ``follow_redirects`` and judge the page it lands on.
+            resp = session.get(path, follow_redirects=True)
+            status, text = resp.status_code, resp.get_data(as_text=True)
+        broken = _error_page_marker(text)
         R.truth(f"V-{path.strip('/') or 'home'}", f"GET {path}",
-                status == 200, status, 200, page=path)
+                status == 200 and not broken,
+                status if not broken else f"{status} + error page: {broken}",
+                200, page=path)
 
 
 # ===========================================================================
@@ -480,10 +553,38 @@ def walk_pages(session, R):
 def verify_figures(session, db, R):
     print("\n== mathematical verification (figures vs DB) ==")
 
+    # ---- Main Cash closing, derived from the seeded money documents ----
+    # Every rupee that actually entered or left the drawer during seeding:
+    # client receipts into Main Cash, the GRN payment and driver settlement out
+    # of it, the owner's cash-flow entry in, and the cash collected inside the
+    # sale/booking forms (their "paid now" amount is posted to Main Cash when no
+    # account is chosen).  Documented here so the assistant ledger and the
+    # screen can never disagree silently.
+    cash_in = (
+        sum(rcpt["amount"] for rcpt in CLIENT_RECEIPTS if rcpt["account"] == CASH_ACCOUNT["name"])
+        + float(CF_ENTRY["amount"])
+        + sum(float(sale["paid"]) for sale in SALES)
+        + float(BOOKING["paid"])
+    )
+    cash_out = (
+        float(GRN_PAYMENT["amount"])      # paid from Main Cash
+        + float(DRIVER_PAYMENT["amount"])  # driver settled from Main Cash
+    )
+    expected_cash = CASH_ACCOUNT["opening"] + cash_in - cash_out
+    cash_row = next((row for row in db.rows("select name,balance from account")
+                     if row["name"] == CASH_ACCOUNT["name"]), None)
+    R.near("A-00", "Main Cash closing derives from the money documents",
+           cash_row["balance"] if cash_row else None, expected_cash,
+           page="/accounts/accounts")
+
     # ---- stock from material table ----
     stock = {row["name"]: row["total"] for row in db.rows(
         "select name,total from material")}
-    R.near("S-01", "DG stock", stock.get("DG Cement"), EXPECT["stock_dg"], page="/materials")
+    received_dg = sum(qty for _b, _s, _n, _d, mat, qty, _p in GRNS if mat == "DG Cement")
+    dispatched_dg = sum(sale["qty"] for sale in SALES)
+    returned_dg = RETURN["qty"] if RETURN["material"] == "DG Cement" else 0
+    R.near("S-01", "DG stock", stock.get("DG Cement"),
+           float(received_dg - dispatched_dg + returned_dg), page="/materials")
     R.near("S-02", "Pioneer stock", stock.get("Pioneer Cement"),
            EXPECT["stock_pioneer"], page="/materials")
     R.near("S-03", "Sand stock", stock.get("Chenab Sand"),

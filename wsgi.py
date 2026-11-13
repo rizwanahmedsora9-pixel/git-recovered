@@ -19,6 +19,12 @@ os.environ.setdefault("ALLOW_EMPTY_DB", "1")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://still-base-ac7a.rizwanahmedsora9.workers.dev")
 # The web process must not create scheduled backup/database copies.
 os.environ["BACKUP_EMBEDDED_SCHEDULER"] = "0"
+# ... and it must not start any background worker at all (reconcile pass, daily
+# backup, maintenance).  Those belong to a scheduled task:
+#     python tools/maintenance.py backup-daily
+# Leaving AMS_ENABLE_BACKGROUND_WORKERS unset keeps every worker off; the flag is
+# set deliberately (never here) when a process is *meant* to run them.
+os.environ.pop("AMS_ENABLE_BACKGROUND_WORKERS", None)
 
 # SQLite's WAL journal requires POSIX shared memory (the -shm file).  Shared
 # hosts such as PythonAnywhere store /home on a network filesystem where that
@@ -37,6 +43,12 @@ try:
 
     app = create_app()
     application = app
+    # One line in the server log proves no background worker is running in this
+    # process (scheduled work is a cron task calling tools/maintenance.py).
+    logging.getLogger("wsgi").info(
+        "Background workers disabled in the web process "
+        "(AMS_ENABLE_BACKGROUND_WORKERS unset); backups run from the scheduled task."
+    )
 except Exception:  # pragma: no cover - startup diagnostics only
     # Without this, a factory error is only visible in the server error log and
     # the browser shows an opaque "Something went wrong" page.  Serve the real

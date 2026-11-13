@@ -486,6 +486,10 @@ def start_embedded_scheduler(app) -> bool:
     still preferred because daemon threads do not survive process downtime.
     """
     global _worker_started
+    # Same rule as the daily backup: only a process that asked for background
+    # work may start it (``wsgi.py`` never does).
+    if not app.config.get("ENABLE_BACKGROUND_WORKERS", False):
+        return False
     if app.config.get("TESTING") or not app.config.get("BACKUP_EMBEDDED_SCHEDULER", True):
         return False
     with _worker_guard:

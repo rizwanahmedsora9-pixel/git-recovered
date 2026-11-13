@@ -102,6 +102,7 @@ db_path = C.db_path
 _DB_HEALTH_SNAPSHOT_PATH = C._DB_HEALTH_SNAPSHOT_PATH
 _max_upload_mb = C._max_upload_mb
 _AUTO_BACKUP_ENABLED = C._AUTO_BACKUP_ENABLED
+_ENABLE_BACKGROUND_WORKERS = C._ENABLE_BACKGROUND_WORKERS
 _WIPE_BACKUP_ENABLED = C._WIPE_BACKUP_ENABLED
 _AUTO_RECONCILE_ENABLED = C._AUTO_RECONCILE_ENABLED
 _AUTO_RECONCILE_FIX = C._AUTO_RECONCILE_FIX
@@ -115,6 +116,8 @@ _DB_HEALTH_MIN_BYTES = C._DB_HEALTH_MIN_BYTES
 
 def _start_hourly_backup_worker():
     if state.HOURLY_BACKUP_WORKER_STARTED:
+        return
+    if not _ENABLE_BACKGROUND_WORKERS:
         return
     # ``app`` here is Flask's ``current_app`` proxy.  Handing the *proxy* to a
     # thread is fatal: outside a request/app context the proxy raises
@@ -137,6 +140,8 @@ def _start_hourly_backup_worker():
 
 def _start_reconcile_worker():
     if state.RECON_WORKER_STARTED:
+        return
+    if not _ENABLE_BACKGROUND_WORKERS:
         return
     if not _AUTO_RECONCILE_ENABLED:
         return

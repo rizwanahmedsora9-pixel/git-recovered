@@ -75,6 +75,18 @@ _SALE_CATEGORY_ALIASES = {
     'cash sale': 'Cash',
 }
 
+# Background work (auto-reconcile, daily backup, embedded maintenance) must run
+# in a process that was started for it -- a cron/scheduled task or the local dev
+# server -- never inside a web worker.  A WSGI worker that starts these threads
+# copies the database from the request path, competes with the shop for the
+# SQLite write lock, and lets the balance auto-healer rewrite accounts while a
+# user is working.  ``wsgi.py`` deliberately does not set this flag.
+_BACKGROUND_WORKER_VALUES = ('1', 'true', 'yes', 'on')
+_ENABLE_BACKGROUND_WORKERS = (
+    os.environ.get('AMS_ENABLE_BACKGROUND_WORKERS', '').strip().lower()
+    in _BACKGROUND_WORKER_VALUES
+)
+
 _AUTO_BACKUP_ENABLED = False
 
 _WIPE_BACKUP_ENABLED = False
