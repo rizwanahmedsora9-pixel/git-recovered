@@ -2,6 +2,7 @@
 from ._common import *  # noqa
 from app.services.grn_costing import charge_billed_to_supplier
 from app.services.grn_consumption import grn_consumption_for_page
+from app.services.grn_costing import prime_grn_lines
 from app.services.grn_costs import (
     build_grn_costs, grn_cost_supplier_options, normalize_kind,
     COST_KIND_LABELS, KIND_ORDER,
@@ -350,6 +351,10 @@ def grn():
         grn_consumption = None
 
     try:
+        # One bulk load for the listed GRNs' lines/charges/payments: each
+        # ``grn_breakdown`` asks for them, and per-GRN queries made this page
+        # 4,000+ statements on a shop-sized database.
+        prime_grn_lines(grns)
         grn_breakdowns = {g.id: grn_breakdown(g) for g in grns}
     except Exception:
         logging.getLogger('grn').exception('GRN cost breakdown failed')

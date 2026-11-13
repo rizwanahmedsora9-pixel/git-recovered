@@ -523,6 +523,34 @@ def _ensure_user_permission_defaults():
         db.session.rollback()
 
 
+def _accounting_backfill_needed() -> bool:
+    """True when any row still lacks its exact-money/source metadata.
+
+    The repair below loads ``payment``, ``supplier_payment``,
+    ``account_transaction`` and ``account`` in full on every boot, which cost
+    ~1 s of every worker start on a shop-sized database for nothing once the
+    backfill had run.  One indexed probe per table makes the steady state free.
+    """
+    probes = (
+        "SELECT 1 FROM payment WHERE amount_minor IS NULL OR discount_minor IS NULL"
+        " OR client_id IS NULL OR payment_type IS NULL OR revision IS NULL LIMIT 1",
+        "SELECT 1 FROM supplier_payment WHERE amount_minor IS NULL"
+        " OR payment_type IS NULL OR revision IS NULL LIMIT 1",
+        "SELECT 1 FROM account_transaction WHERE amount_minor IS NULL LIMIT 1",
+        "SELECT 1 FROM account WHERE opening_balance IS NULL"
+        " OR opening_balance_minor IS NULL OR balance_minor IS NULL OR revision IS NULL LIMIT 1",
+    )
+    try:
+        for probe in probes:
+            if db.session.execute(text(probe)).first() is not None:
+                return True
+    except Exception:
+        # A missing table/column on an old database means there IS work to do.
+        db.session.rollback()
+        return True
+    return False
+
+
 def _backfill_accounting_integrity_columns():
     """Non-destructively initialise exact-money and source/audit metadata.
 
@@ -531,6 +559,9 @@ def _backfill_accounting_integrity_columns():
     net`` so enabling reproducible ledgers does not change any live balance.
     """
     from utils.money import from_minor, to_minor
+
+    if not _accounting_backfill_needed():
+        return
 
     try:
         # Versioned ORM rows require a non-NULL committed version before they
@@ -809,6 +840,34 @@ _PERFORMANCE_INDEXES = [
     # find_bill_conflict check is the primary guard; this unique partial index
     # makes a second commit impossible even under a race.
     ("uq_grn_manual_bill_no",      "CREATE UNIQUE INDEX IF NOT EXISTS uq_grn_manual_bill_no ON grn(manual_bill_no) WHERE manual_bill_no IS NOT NULL AND TRIM(manual_bill_no) <> ''"),
+    # Foreign-key lookups ("the lines of this sale", "the GRNs of this supplier",
+    # "the payments that hit this account").  Same list as migration 0013, so a
+    # database reaches the same schema whichever entry point runs first;
+    # CREATE INDEX IF NOT EXISTS makes the overlap free.
+    ("ix_booking_receive_in_account_id", "CREATE INDEX IF NOT EXISTS ix_booking_receive_in_account_id ON booking(receive_in_account_id)"),
+    ("ix_booking_item_booking_id", "CREATE INDEX IF NOT EXISTS ix_booking_item_booking_id ON booking_item(booking_id)"),
+    ("ix_cash_flow_entry_account_tx_id", "CREATE INDEX IF NOT EXISTS ix_cash_flow_entry_account_tx_id ON cash_flow_entry(account_tx_id)"),
+    ("ix_client_transferred_to_id", "CREATE INDEX IF NOT EXISTS ix_client_transferred_to_id ON client(transferred_to_id)"),
+    ("ix_delivery_item_delivery_id", "CREATE INDEX IF NOT EXISTS ix_delivery_item_delivery_id ON delivery_item(delivery_id)"),
+    ("ix_direct_sale_invoice_id", "CREATE INDEX IF NOT EXISTS ix_direct_sale_invoice_id ON direct_sale(invoice_id)"),
+    ("ix_direct_sale_payment_account_id", "CREATE INDEX IF NOT EXISTS ix_direct_sale_payment_account_id ON direct_sale(payment_account_id)"),
+    ("ix_direct_sale_item_grn_item_id", "CREATE INDEX IF NOT EXISTS ix_direct_sale_item_grn_item_id ON direct_sale_item(grn_item_id)"),
+    ("ix_direct_sale_item_sale_id", "CREATE INDEX IF NOT EXISTS ix_direct_sale_item_sale_id ON direct_sale_item(sale_id)"),
+    ("ix_entry_invoice_id", "CREATE INDEX IF NOT EXISTS ix_entry_invoice_id ON entry(invoice_id)"),
+    ("ix_fbm_rental_client_id", "CREATE INDEX IF NOT EXISTS ix_fbm_rental_client_id ON fbm_rental(client_id)"),
+    ("ix_fbm_rental_item_id", "CREATE INDEX IF NOT EXISTS ix_fbm_rental_item_id ON fbm_rental(item_id)"),
+    ("ix_fbm_rental_payment_account_id", "CREATE INDEX IF NOT EXISTS ix_fbm_rental_payment_account_id ON fbm_rental(payment_account_id)"),
+    ("ix_follow_up_contact_pending_bill_id", "CREATE INDEX IF NOT EXISTS ix_follow_up_contact_pending_bill_id ON follow_up_contact(pending_bill_id)"),
+    ("ix_follow_up_contact_reminder_id", "CREATE INDEX IF NOT EXISTS ix_follow_up_contact_reminder_id ON follow_up_contact(reminder_id)"),
+    ("ix_follow_up_reminder_pending_bill_id", "CREATE INDEX IF NOT EXISTS ix_follow_up_reminder_pending_bill_id ON follow_up_reminder(pending_bill_id)"),
+    ("ix_grn_payment_account_id", "CREATE INDEX IF NOT EXISTS ix_grn_payment_account_id ON grn(payment_account_id)"),
+    ("ix_grn_supplier_id", "CREATE INDEX IF NOT EXISTS ix_grn_supplier_id ON grn(supplier_id)"),
+    ("ix_grn_item_grn_id", "CREATE INDEX IF NOT EXISTS ix_grn_item_grn_id ON grn_item(grn_id)"),
+    ("ix_import_job_initiated_by", "CREATE INDEX IF NOT EXISTS ix_import_job_initiated_by ON import_job(initiated_by)"),
+    ("ix_import_upload_uploaded_by", "CREATE INDEX IF NOT EXISTS ix_import_upload_uploaded_by ON import_upload(uploaded_by)"),
+    ("ix_payment_payment_account_id", "CREATE INDEX IF NOT EXISTS ix_payment_payment_account_id ON payment(payment_account_id)"),
+    ("ix_supplier_transferred_to_id", "CREATE INDEX IF NOT EXISTS ix_supplier_transferred_to_id ON supplier(transferred_to_id)"),
+    ("ix_supplier_payment_payment_account_id", "CREATE INDEX IF NOT EXISTS ix_supplier_payment_payment_account_id ON supplier_payment(payment_account_id)"),
 ]
 
 

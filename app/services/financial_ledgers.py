@@ -61,6 +61,7 @@ from app.services.grn_costing import (
     charge_supplier_billed_minor,
     charge_effective_minor,
     active_charges,
+    prime_grn_lines,
     supplier_material_minor,
     supplier_billed_charge_minor,
     expense_route_allocation,
@@ -802,15 +803,24 @@ def _make_client_obligations(client, *, snapshot=None, allocate_remaining=True):
             remaining_by_key[obligation["key"]] = max(
                 Decimal("0.00"), obligation["gross"] - obligation["embedded_credit"]
             )
+        # FIFO allocation.  A fully settled bill can never become unsettled
+        # again, so start each credit where the previous one stopped instead of
+        # rescanning every bill: identical order and identical amounts, but
+        # linear in bills + credits instead of bills x credits (the client
+        # ledger index on a shop with thousands of bills spent seconds here).
+        first_open = 0
         for credit in sorted(external_credits, key=lambda r: (r["date"], int(r["source_id"] or 0))):
             remaining = credit["amount"]
-            for obligation in obligations:
+            while first_open < len(obligations) and remaining_by_key[obligations[first_open]["key"]] <= 0:
+                first_open += 1
+            for index in range(first_open, len(obligations)):
                 if remaining <= 0:
                     break
-                key = obligation["key"]
+                key = obligations[index]["key"]
                 settle = min(remaining_by_key[key], remaining)
-                remaining_by_key[key] -= settle
-                remaining -= settle
+                if settle > 0:
+                    remaining_by_key[key] -= settle
+                    remaining -= settle
         for obligation in obligations:
             obligation["remaining"] = _float(remaining_by_key[obligation["key"]])
 
@@ -1493,11 +1503,21 @@ def build_supplier_payable_overview(suppliers=None):
         return {}
 
     grns = GRN.query.options(selectinload(GRN.items)).filter(GRN.is_void == False).all()
+    # One bulk load for the period's GRN lines/charges: every helper below asks
+    # ``active_items(grn)``/``active_charges(grn)`` once per document.
+    prime_grn_lines(grns)
     payments = [p for p in SupplierPayment.query.filter(SupplierPayment.is_void == False).all()
                 if _is_supplier_ledger_payment(p)]
     payments_by_supplier = defaultdict(list)
     for payment in payments:
         payments_by_supplier[payment.supplier_id].append(payment)
+
+    grns_by_supplier_id = defaultdict(list)
+    grns_by_supplier_name = defaultdict(list)
+    for grn in grns:
+        if grn.supplier_id:
+            grns_by_supplier_id[grn.supplier_id].append(grn)
+        grns_by_supplier_name[_norm(grn.supplier)].append(grn)
 
     overview = {}
     for supplier in suppliers:
@@ -1512,9 +1532,13 @@ def build_supplier_payable_overview(suppliers=None):
         last_purchase_at = None
         last_payment_at = None
 
-        for grn in grns:
-            if grn.supplier_id != supplier.id and _norm(grn.supplier) != supplier_name:
-                continue
+        # Same rows and order as the previous full scan, but only this
+        # supplier's own documents (the scan made the page O(suppliers x GRNs)).
+        supplier_grns = {
+            id(grn): grn
+            for grn in grns_by_supplier_id.get(supplier.id, []) + grns_by_supplier_name.get(supplier_name, [])
+        }
+        for grn in sorted(supplier_grns.values(), key=lambda g: (getattr(g, "date_posted", None) or datetime.min, g.id)):
             grn_total = _grn_supplier_credit(grn)
             total_purchase += grn_total
             balance += grn_total

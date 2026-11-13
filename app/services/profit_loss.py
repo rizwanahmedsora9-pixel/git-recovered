@@ -93,7 +93,7 @@ from app.services.profit_loss_breakdown import (
     row_group,
 )
 from app.services.grn_consumption import build_grn_consumption
-from app.services.grn_costing import lot_cost_rate, lot_cost_components, charge_effective_minor
+from app.services.grn_costing import lot_cost_rate, lot_cost_components, charge_effective_minor, prime_grn_lines
 from app.services import pricing as _pricing
 from app.services.lookups import is_rent_like_name
 from app.services.sales_core import _direct_sale_default_bill_ref, normalize_sale_category
@@ -455,6 +455,11 @@ class _Projection:
         ).all()
         self.grn_item_by_id = {item.id: item for grn in self.grns for item in grn.items}
         self.grn_by_id = {grn.id: grn for grn in self.grns}
+        # Load the period's GRN lines and charges ONCE.  Costing/payables helpers
+        # ask ``active_items(grn)``/``active_charges(grn)`` per document; without
+        # this they issued one query per GRN (20,000+ statements on a report
+        # page with a few thousand GRNs, against 17 ms of actual SQL work).
+        prime_grn_lines(self.grns)
         self.entries = Entry.query.order_by(Entry.created_at.asc(), Entry.id.asc()).all()
         self.returns = MaterialReturn.query.options(selectinload(MaterialReturn.items)).order_by(
             MaterialReturn.date_posted.asc(), MaterialReturn.id.asc()
@@ -820,11 +825,39 @@ class _Projection:
         def lot_available(lot_date, tx_dt):
             return _lot_available(lot_date, tx_dt)
 
+        # ``remaining`` only ever shrinks, so a fully consumed lot at the FRONT of
+        # a material's queue can be skipped for good.  Remembering that position
+        # turns repeated FIFO dispatches from "rescan the purchase history" into
+        # "continue where the last dispatch stopped".  Semantics are unchanged:
+        # the loop still breaks on a satisfied dispatch and still tests every lot
+        # it actually reaches.  Material returns append+re-sort a queue, which can
+        # put a usable lot back in front, so the pointer is reset there.
+        _front_lot = {}
+
+        def _queue(key):
+            lots = lots_by_material.get(key, [])
+            start = _front_lot.get(key, 0)
+            while start < len(lots) and lots[start]["remaining"] <= EPS:
+                start += 1
+            _front_lot[key] = start
+            return lots, start
+
         def consume_fifo(material_name, qty, tx_dt):
             remaining = max(0.0, qty)
             layers = []
-            for lot in lots_by_material.get(_mat_key(material_name), []):
+            key = _mat_key(material_name)
+            lots, start = _queue(key)
+            # Dates are immutable and the queue is sorted by date, so a lot past
+            # the transaction date ends the (already short) scan just like the
+            # never-available ones that were skipped.  Testing the date once per
+            # range instead of once per lot keeps the same FIFO order and the same
+            # layers; only the amount of arithmetic changes.
+            tx_day = _day(tx_dt)
+            for index in range(start, len(lots)):
                 if remaining <= EPS:
+                    break
+                lot = lots[index]
+                if tx_day is not None and lot["date"] is not None and lot["date"].date() > tx_day:
                     break
                 if not lot_available(lot["date"], tx_dt):
                     continue
@@ -1259,6 +1292,9 @@ class _Projection:
                     lots_by_material[_mat_key(return_item.material_name)].sort(
                         key=lambda lot: (lot["date"] or datetime.min, lot["grn_id"] or 0, lot["grn_item_id"] or 0)
                     )
+                    # The queue was re-sorted with a new layer, so a consumed lot
+                    # may no longer be at the front: rescan from the beginning.
+                    _front_lot.pop(_mat_key(return_item.material_name), None)
 
         # Returns restore evidenced cost layers before any later issue is
         # costed.  Matching is intentionally the same conservative FIFO pool

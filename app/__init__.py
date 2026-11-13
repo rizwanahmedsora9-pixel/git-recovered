@@ -164,6 +164,14 @@ def create_app(test_config: dict | None = None) -> Flask:
         # Do not create backup database files from the web process. Backups
         # remain available only through an explicit maintenance operation.
         BACKUP_EMBEDDED_SCHEDULER=(os.environ.get("BACKUP_EMBEDDED_SCHEDULER", "0").strip().lower() not in ("0", "false", "no")),
+        # Scheduled work (reconcile pass, daily backup, embedded maintenance)
+        # runs only where it was asked for: ``AMS_ENABLE_BACKGROUND_WORKERS=1``.
+        # It defaults to off so a WSGI worker never copies the database or
+        # rewrites balances from a request.
+        ENABLE_BACKGROUND_WORKERS=(
+            os.environ.get("AMS_ENABLE_BACKGROUND_WORKERS", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        ),
         # Versioned automatic schema migrations (app/services/auto_migrate.py):
         # numbered NNNN_*.sql files in app/migrations/ apply on every boot.
         MIGRATIONS_DIR=os.environ.get(
@@ -267,8 +275,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Compile every Jinja template once at startup so the first request after a
     # worker (re)start doesn't pay a ~200ms+ compile cost for layout.html +
-    # the large module pages.  Compilation is side-effect free and the bytecode
-    # cache then serves every later request.
+    # the large module pages.  The compiled code is persisted (bytecode cache)
+    # so a restart only recompiles what actually changed.
+    _install_template_bytecode_cache(app)
     _warm_template_cache(app)
 
     with app.app_context():
@@ -396,6 +405,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Start once at application startup, never from a user request. The
     # cross-process filesystem lock prevents duplicate work under Gunicorn.
+    # Both schedulers refuse to start unless AMS_ENABLE_BACKGROUND_WORKERS is
+    # set (``wsgi.py`` never sets it), so a deployed web worker stays free of
+    # maintenance threads; cron runs them explicitly instead.
     from app.services.maintenance import start_embedded_scheduler
     start_embedded_scheduler(app)
 
@@ -481,11 +493,48 @@ def _resolve_sqlite_journal_mode(db_path: str) -> str:
     return "WAL"
 
 
+def _install_template_bytecode_cache(app: Flask) -> None:
+    """Persist compiled templates between worker restarts.
+
+    Jinja recompiled all 139 templates on every ``create_app()`` — the single
+    largest part of boot (measured ~1.5 s of a 1.8 s boot).  A
+    :class:`jinja2.FileSystemBytecodeCache` keeps the compiled code on disk and
+    invalidates an entry exactly when its template source changes, so the warm
+    path is fast without any staleness rules of our own.
+
+    Deliberately conservative:
+
+    * never in tests (a throw-away app per test would only churn the folder),
+    * never when ``TEMPLATES_AUTO_RELOAD`` is on (a developer wants the source),
+    * a failure to write the cache leaves plain Jinja behaviour in place.
+    """
+    try:
+        if app.config.get("TESTING") or app.jinja_env.auto_reload:
+            return
+
+        from jinja2 import FileSystemBytecodeCache
+
+        cache_dir = Path(app.instance_path) / "cache" / "jinja"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        app.jinja_env.bytecode_cache = FileSystemBytecodeCache(str(cache_dir))
+        app.config["AMS_TEMPLATE_CACHE_DIR"] = str(cache_dir)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Template bytecode cache disabled; templates will compile per boot.",
+            exc_info=True,
+        )
+
+
 def _warm_template_cache(app: Flask) -> None:
     """Pre-compile templates so the first page hit after boot is already warm.
 
     Only compiles (``jinja_env.get_template``); it never renders, so no request
     context or context-processor data is needed.
+
+    Compilation results are persisted in a bytecode cache under ``instance/``
+    (see :func:`_install_template_bytecode_cache`), so this costs ~30 ms on a
+    worker restart instead of ~1.5 s, and only the templates that actually
+    changed are recompiled after a deploy.
     """
     try:
         templates_root = Path(app.template_folder)

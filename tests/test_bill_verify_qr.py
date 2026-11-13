@@ -22,6 +22,16 @@ import pytest
 
 from app.services import bill_urdu
 from app.services import qr_code, urdu_receipt as R
+from app.services.urdu_text import harfbuzz_available
+
+# Widths are measured with the real shaper.  On a host without the optional
+# uharfbuzz wheel the sheet still renders (fontTools fallback) but its metrics
+# differ, so the reference-geometry assertions are skipped there instead of
+# reporting a failure the host cannot fix.
+requires_harfbuzz = pytest.mark.skipif(
+    not harfbuzz_available(),
+    reason="reference layouts are measured with HarfBuzz shaping (uharfbuzz missing)",
+)
 
 import test_urdu_bill_sheet as base   # noqa: E402  (tests/ is on pythonpath)
 from test_urdu_bill_sheet import sale  # noqa: E402,F401  (real posted bill fixture)
@@ -144,6 +154,7 @@ def test_urdu_words_keep_the_gap_the_sheet_draws():
     assert round(R.word_gap(8.0), 3) == 1.92
 
 
+@requires_harfbuzz
 def test_the_pdf_draws_a_real_gap_between_urdu_words():
     """The drawn pen must advance by the word gap, not by 5 font units."""
     sheet = R._new_sheet()

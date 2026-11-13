@@ -108,12 +108,220 @@ def _f(minor):
     return float(from_minor(int(minor or 0)))
 
 
+def _bulk_items(grn_ids):
+    """{(grn_id): [GRNItem]} for many GRNs in one query.
+
+    The single-GRN helpers below run once per GRN in a report; asking the
+    database per GRN turned a 4,000-GRN page into 4,000 queries (measured:
+    5,400 charge queries and 5,000 line queries on one report page).  Reports
+    load the period's lines once and prime this map instead.
+    """
+    grouped = {}
+    ids = [int(i) for i in grn_ids if i]
+    if not ids:
+        return {}
+    rows = (
+        GRNItem.query.filter(
+            GRNItem.grn_id.in_(ids),
+            GRNItem.is_void == False,  # noqa: E712
+            GRNItem.qty > 0,
+        )
+        .order_by(GRNItem.grn_id.asc(), GRNItem.id.asc())
+        .all()
+    )
+    for row in rows:
+        grouped.setdefault(int(row.grn_id), []).append(row)
+    return grouped
+
+
+def _bulk_charges(grn_ids):
+    """{(grn_id): [GRNCharge]} for many GRNs in one query (see ``_bulk_items``)."""
+    grouped = {}
+    ids = [int(i) for i in grn_ids if i]
+    if not ids:
+        return {}
+    rows = (
+        GRNCharge.query.filter(
+            GRNCharge.grn_id.in_(ids),
+            GRNCharge.is_void == False,  # noqa: E712
+        )
+        .order_by(GRNCharge.grn_id.asc(), GRNCharge.id.asc())
+        .all()
+    )
+    for row in rows:
+        grouped.setdefault(int(row.grn_id), []).append(row)
+    return grouped
+
+
+# Per-request batch maps.  Values are only read back for the GRN ids that were
+# primed, so a stale or partial map can never invent a line or a charge: an
+# unprimed GRN still takes the direct query path below.
+#
+# ``_PRIMED_DB_KEY`` records which database the maps were filled from.  Two
+# apps in one process (tests, a migration tool) must never hand each other's
+# rows back, so every read is scoped to the current engine; the maps are also
+# dropped on commit/rollback (see ``invalidate_line_cache``).
+_PRIMED_DB_KEY = [None]
+_PRIMED_ITEMS = {}
+_PRIMED_CHARGES = {}
+# Charge id -> money paid straight to that expense's recipient (minor units),
+# for charges whose recipient payments were loaded in bulk by ``prime_grn_lines``.
+_PRIMED_CHARGE_RECIPIENT_PAID = {}
+_PRIMED_PAYMENTS = {}
+_PRIMED_CASH_PAID = {}
+# ``SupplierPayment.grn_id IS NULL`` rows matched by an ``[auto_grn_pay:<id>]``
+# marker.  That scan is parent-less (nothing to join on), so the only way to make
+# it bounded is to load the (small) table once per connection instead of once
+# per GRN.  Keyed by the SQLAlchemy engine so the cache lives exactly as long as
+# the database it was read from, and cleared on commit/rollback/DDL.
+_LEGACY_GRN_PAYMENTS = {}
+
+
+def _primed_store():
+    """Return the batch maps for the database this request is reading.
+
+    A different engine means different data: clear everything first so a cached
+    row id from another database can never be returned.
+    """
+    try:
+        key = id(db.engine)
+    except Exception:
+        key = None
+    if key is not None and _PRIMED_DB_KEY[0] != key:
+        invalidate_line_cache()
+        _PRIMED_DB_KEY[0] = key
+    return {
+        "items": _PRIMED_ITEMS,
+        "charges": _PRIMED_CHARGES,
+        "recipient_paid": _PRIMED_CHARGE_RECIPIENT_PAID,
+        "payments": _PRIMED_PAYMENTS,
+        "cash_paid": _PRIMED_CASH_PAID,
+    }
+
+
+def _legacy_grn_payments_cache_key():
+    try:
+        return id(db.engine)
+    except Exception:
+        return None
+
+
+def invalidate_line_cache():
+    """Drop every cached GRN line/charge/payment batch (call after a write)."""
+    _PRIMED_ITEMS.clear()
+    _PRIMED_CHARGES.clear()
+    _PRIMED_CHARGE_RECIPIENT_PAID.clear()
+    _PRIMED_PAYMENTS.clear()
+    _PRIMED_CASH_PAID.clear()
+    _LEGACY_GRN_PAYMENTS.clear()
+
+
+def _install_line_cache_invalidation():
+    """Clear the caches whenever the session ends a transaction."""
+    from sqlalchemy import event
+
+    engine = db.engine
+    if getattr(engine, "_ams_line_cache_hook", False):
+        return
+    # Engine-level "commit"/"rollback" fire when a connection ends its
+    # transaction, i.e. exactly when a write could have changed what we cached.
+    for name in ("commit", "rollback"):
+        event.listen(engine, name, lambda conn: invalidate_line_cache())
+    engine._ams_line_cache_hook = True
+
+
+def _legacy_marked_payments(grn_id):
+    """``SupplierPayment`` rows that reference *grn_id* only through a note marker."""
+    marker = f"[auto_grn_pay:{grn_id}]".lower()
+    key = _legacy_grn_payments_cache_key()
+    if key is not None:
+        cached = _LEGACY_GRN_PAYMENTS.get(key)
+        if cached is None:
+            cached = SupplierPayment.query.filter(
+                SupplierPayment.grn_id.is_(None),
+                SupplierPayment.is_void == False,  # noqa: E712
+                func.lower(func.coalesce(SupplierPayment.note, '')).like('%[auto_grn_pay:%'),
+            ).all()
+            _LEGACY_GRN_PAYMENTS.clear()
+            _LEGACY_GRN_PAYMENTS[key] = cached
+        return [r for r in cached if marker in (getattr(r, 'note', '') or '').lower()]
+    return SupplierPayment.query.filter(
+        SupplierPayment.grn_id.is_(None),
+        SupplierPayment.is_void == False,  # noqa: E712
+        func.lower(func.coalesce(SupplierPayment.note, '')).like(f"%{marker}%"),
+    ).all()
+
+
+def _bulk_grn_payments(grn_ids):
+    """{grn_id: [SupplierPayment]} for many GRNs in one query, markers included."""
+    ids = [int(i) for i in grn_ids if i]
+    if not ids:
+        return {}
+    grouped = {}
+    rows = SupplierPayment.query.filter(
+        SupplierPayment.grn_id.in_(ids),
+        SupplierPayment.is_void == False,  # noqa: E712
+    ).order_by(SupplierPayment.grn_id.asc(), SupplierPayment.id.asc()).all()
+    for row in rows:
+        grouped.setdefault(int(row.grn_id), []).append(row)
+    for grn_id in ids:
+        bucket = grouped.setdefault(grn_id, [])
+        seen = {r.id for r in bucket}
+        for row in _legacy_marked_payments(grn_id):
+            if row.id not in seen:
+                bucket.append(row)
+    return grouped
+
+
+def _bulk_charge_recipient_paid(charge_ids):
+    """{charge_id: minor} of SupplierPayment rows addressed to a GRN expense."""
+    ids = [int(i) for i in charge_ids if i]
+    if not ids:
+        return {}
+    totals = {charge_id: 0 for charge_id in ids}
+    rows = SupplierPayment.query.filter(
+        SupplierPayment.grn_charge_id.in_(ids),
+        SupplierPayment.is_void == False,  # noqa: E712
+    ).all()
+    for row in rows:
+        current = getattr(row, 'amount_minor', None)
+        amount = int(current) if current is not None else _minor(getattr(row, 'amount', 0))
+        totals[int(row.grn_charge_id)] = totals.get(int(row.grn_charge_id), 0) + amount
+    return totals
+
+
+def prime_grn_lines(grns):
+    """Load lines and charges for *grns* in bulk (read-only helper for reports)."""
+    ids = [int(i) for i in (getattr(g, 'id', None) for g in (grns or [])) if i]
+    _install_line_cache_invalidation()
+    items = _bulk_items(ids)
+    charges = _bulk_charges(ids)
+    for grn_id in ids:
+        # An explicit empty list matters: most GRNs have no expense lines, and
+        # without the entry each of them would still run its own query.
+        _PRIMED_ITEMS[grn_id] = items.get(grn_id, [])
+        _PRIMED_CHARGES[grn_id] = charges.get(grn_id, [])
+    charge_ids = [c.id for charges in charges.values() for c in charges]
+    _PRIMED_CHARGE_RECIPIENT_PAID.update(_bulk_charge_recipient_paid(charge_ids))
+    payments = _bulk_grn_payments(ids)
+    cash_paid = _bulk_cash_paid(ids)
+    for grn_id in ids:
+        _PRIMED_PAYMENTS[grn_id] = payments.get(grn_id, [])
+        _PRIMED_CASH_PAID[grn_id] = cash_paid.get(grn_id, 0)
+    return len(_PRIMED_ITEMS), len(_PRIMED_CHARGES)
+
+
 def active_items(grn):
     """Query directly: a cached relationship may miss rows added in this
     same request (a GRN is saved with its lines and charges in one flush)."""
     if grn is None:
         return []
-    if getattr(grn, 'id', None):
+    grn_id = getattr(grn, 'id', None)
+    if grn_id:
+        _primed_store()
+        if int(grn_id) in _PRIMED_ITEMS:
+            return list(_PRIMED_ITEMS[int(grn_id)])
+    if grn_id:
         try:
             return [
                 i for i in GRNItem.query.filter(
@@ -133,7 +341,12 @@ def active_items(grn):
 def active_charges(grn):
     if grn is None:
         return []
-    if getattr(grn, 'id', None):
+    grn_id = getattr(grn, 'id', None)
+    if grn_id:
+        _primed_store()
+        if int(grn_id) in _PRIMED_CHARGES:
+            return list(_PRIMED_CHARGES[int(grn_id)])
+    if grn_id:
         try:
             return GRNCharge.query.filter(
                 GRNCharge.grn_id == grn.id,
@@ -338,6 +551,10 @@ def charge_recipient_paid_minor(charge):
     """Money already paid straight to an expense's own recipient."""
     if charge is None or getattr(charge, 'id', None) is None:
         return 0
+    _primed_store()
+    primed = _PRIMED_CHARGE_RECIPIENT_PAID.get(int(charge.id))
+    if primed is not None:
+        return primed
     rows = SupplierPayment.query.filter(
         SupplierPayment.grn_charge_id == charge.id,
         SupplierPayment.is_void == False,  # noqa: E712
@@ -525,8 +742,31 @@ def _charge_minor(charge):
     return int(current)
 
 
+def _bulk_cash_paid(grn_ids):
+    """{grn_id: minor} of money that left a cash/bank account, in one query."""
+    ids = [int(i) for i in grn_ids if i]
+    totals = {grn_id: 0 for grn_id in ids}
+    if not ids:
+        return totals
+    rows = AccountTransaction.query.filter(
+        AccountTransaction.grn_id.in_(ids),
+        AccountTransaction.is_void == False,  # noqa: E712
+        AccountTransaction.from_account_id.isnot(None),
+    ).all()
+    for tx in rows:
+        current = getattr(tx, 'amount_minor', None)
+        amount = int(current) if current is not None else _minor(getattr(tx, 'amount', 0))
+        totals[int(tx.grn_id)] = totals.get(int(tx.grn_id), 0) + amount
+    return totals
+
+
 def _cash_paid_minor(grn):
     """Money that ACTUALLY left a cash/bank account for this GRN."""
+    grn_id = getattr(grn, 'id', None)
+    if grn_id:
+        _primed_store()
+        if int(grn_id) in _PRIMED_CASH_PAID:
+            return _PRIMED_CASH_PAID[int(grn_id)]
     rows = AccountTransaction.query.filter(
         AccountTransaction.grn_id == grn.id,
         AccountTransaction.is_void == False,  # noqa: E712
@@ -540,6 +780,11 @@ def _cash_paid_minor(grn):
 
 
 def _payment_rows(grn):
+    grn_id = getattr(grn, 'id', None)
+    if grn_id:
+        _primed_store()
+        if int(grn_id) in _PRIMED_PAYMENTS:
+            return list(_PRIMED_PAYMENTS[int(grn_id)])
     q = SupplierPayment.query.filter(
         SupplierPayment.grn_id == grn.id,
         SupplierPayment.is_void == False,  # noqa: E712
@@ -547,12 +792,7 @@ def _payment_rows(grn):
     rows = list(q.all())
     # Legacy GRNs used a marker-only auto payment without grn_id.  Keep those
     # attached so historical balances stay intact without rewriting them.
-    marker = f"[auto_grn_pay:{grn.id}]".lower()
-    legacy = SupplierPayment.query.filter(
-        SupplierPayment.grn_id.is_(None),
-        SupplierPayment.is_void == False,  # noqa: E712
-        func.lower(func.coalesce(SupplierPayment.note, '')).like(f"%{marker}%"),
-    ).all()
+    legacy = _legacy_marked_payments(grn.id)
     seen = {r.id for r in rows}
     for r in legacy:
         if r.id not in seen:
