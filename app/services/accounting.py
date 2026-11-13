@@ -158,6 +158,33 @@ def _void_account_tx(tx):
     return True
 
 
+def _remove_account_tx(tx):
+    """Reverse financial effect on accounts and delete the AccountTransaction and any linked CashFlowEntry."""
+    if not tx:
+        return False
+    if not bool(getattr(tx, 'is_void', False)):
+        _reverse_account_tx_effect(tx)
+    tx.is_void = True
+    tx_id = getattr(tx, 'id', None)
+    if tx_id:
+        cf_ids = [
+            r[0] for r in db.session.query(CashFlowEntry.id)
+            .filter(or_(
+                CashFlowEntry.account_tx_id == tx_id,
+                and_(
+                    tx.source_type == 'CashFlowEntry',
+                    CashFlowEntry.id == (tx.source_id or -1),
+                ),
+            )).all()
+        ]
+        if cf_ids:
+            CashFlowEntryAudit.query.filter(CashFlowEntryAudit.entry_id.in_(cf_ids)).delete(synchronize_session=False)
+            CashFlowEntry.query.filter(CashFlowEntry.id.in_(cf_ids)).delete(synchronize_session=False)
+        LoanMovement.query.filter_by(account_tx_id=tx_id).update({'account_tx_id': None}, synchronize_session=False)
+    db.session.delete(tx)
+    return True
+
+
 def _unvoid_account_tx(tx):
     if not tx or not bool(getattr(tx, 'is_void', False)):
         return False
@@ -170,27 +197,31 @@ def _sync_linked_receipt_tx(kind, src_id, to_account_id, amount, date_posted, de
     marker = _src_marker(kind, src_id)
     existing = AccountTransaction.query.filter(
         AccountTransaction.transaction_type == 'Receipt',
-        AccountTransaction.note.ilike(f"%{marker}%")
+        or_(
+            AccountTransaction.note.ilike(f"%{marker}%"),
+            and_(AccountTransaction.source_type == kind, AccountTransaction.source_id == src_id),
+        )
     ).order_by(AccountTransaction.id.desc()).all()
 
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        _void_account_tx(extra)
+        _remove_account_tx(extra)
 
     desired_ok = (not bool(is_void)) and bool(to_account_id) and float(amount or 0) > 0
     if not desired_ok:
         if primary:
-            _void_account_tx(primary)
+            _remove_account_tx(primary)
         return
 
-    # If the existing tx doesn't match the new intent, void and recreate to keep balances correct.
+    # If the existing tx doesn't match the new intent, remove and recreate to keep balances correct.
     if primary and (not primary.is_void) and (
         primary.to_account_id != to_account_id or _tx_minor(primary) != to_minor(amount or 0)
     ):
-        _void_account_tx(primary)
+        _remove_account_tx(primary)
         primary = None
 
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     if not primary:
@@ -223,26 +254,30 @@ def _sync_linked_supplier_payment_tx(kind, src_id, from_account_id, amount, date
     marker = _src_marker(kind, src_id)
     existing = AccountTransaction.query.filter(
         AccountTransaction.transaction_type == 'Supplier Payment',
-        AccountTransaction.note.ilike(f"%{marker}%")
+        or_(
+            AccountTransaction.note.ilike(f"%{marker}%"),
+            and_(AccountTransaction.source_type == kind, AccountTransaction.source_id == src_id),
+        )
     ).order_by(AccountTransaction.id.desc()).all()
 
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        _void_account_tx(extra)
+        _remove_account_tx(extra)
 
     desired_ok = (not bool(is_void)) and bool(from_account_id) and float(amount or 0) > 0
     if not desired_ok:
         if primary:
-            _void_account_tx(primary)
+            _remove_account_tx(primary)
         return
 
     if primary and (not primary.is_void) and (
         primary.from_account_id != from_account_id or _tx_minor(primary) != to_minor(amount or 0)
     ):
-        _void_account_tx(primary)
+        _remove_account_tx(primary)
         primary = None
 
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     if not primary:
@@ -291,22 +326,23 @@ def _sync_linked_grn_payment_tx(payment):
 
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        _void_account_tx(extra)
+        _remove_account_tx(extra)
 
     amount = float(getattr(payment, 'amount', 0) or 0)
     desired_ok = (not bool(getattr(payment, 'is_void', False))) and bool(getattr(payment, 'payment_account_id', None)) and amount > 0
     if not desired_ok:
         if primary:
-            _void_account_tx(primary)
+            _remove_account_tx(primary)
         return
 
     if primary and (not primary.is_void) and (
         primary.from_account_id != getattr(payment, 'payment_account_id', None)
         or _tx_minor(primary) != to_minor(amount)
     ):
-        _void_account_tx(primary)
+        _remove_account_tx(primary)
         primary = None
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     recipient = (getattr(payment, 'recipient_name', None) or
@@ -362,25 +398,28 @@ def _sync_linked_client_refund_tx(src_id, from_account_id, amount, date_posted, 
     existing = AccountTransaction.query.filter(
         AccountTransaction.transaction_type.in_(['Refund', 'Payment']),
         or_(AccountTransaction.note.ilike(f"%{canonical}%"),
-            AccountTransaction.note.ilike(f"%{legacy}%"))
+            AccountTransaction.note.ilike(f"%{legacy}%"),
+            and_(AccountTransaction.source_type == 'Payment',
+                 AccountTransaction.source_id == src_id))
     ).order_by(AccountTransaction.id.desc()).all()
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        _void_account_tx(extra)
+        _remove_account_tx(extra)
 
     refund_minor = abs(to_minor(amount or 0))
     desired_ok = (not bool(is_void)) and bool(from_account_id) and refund_minor > 0
     if not desired_ok:
         if primary:
-            _void_account_tx(primary)
+            _remove_account_tx(primary)
         return
 
     if primary and not primary.is_void and (
         primary.from_account_id != from_account_id or _tx_minor(primary) != refund_minor
     ):
-        _void_account_tx(primary)
+        _remove_account_tx(primary)
         primary = None
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     if not primary:
@@ -428,21 +467,22 @@ def _sync_linked_driver_payment_tx(kind, src_id, from_account_id, amount, date_p
 
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        _void_account_tx(extra)
+        _remove_account_tx(extra)
 
     desired_ok = (not bool(is_void)) and bool(from_account_id) and float(amount or 0) > 0
     if not desired_ok:
         if primary:
-            _void_account_tx(primary)
+            _remove_account_tx(primary)
         return
 
     if primary and (not primary.is_void) and (
         primary.from_account_id != from_account_id or _tx_minor(primary) != to_minor(amount or 0)
     ):
-        _void_account_tx(primary)
+        _remove_account_tx(primary)
         primary = None
 
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     if not primary:
@@ -479,18 +519,19 @@ def _sync_linked_loss_tx(kind, src_id, amount, date_posted, description, note, i
     ).order_by(AccountTransaction.id.desc()).all()
     primary = existing[0] if existing else None
     for extra in existing[1:]:
-        extra.is_void = True
+        _remove_account_tx(extra)
 
     desired_ok = (not bool(is_void)) and float(amount or 0) > 0
     if not desired_ok:
         if primary:
-            primary.is_void = True
+            _remove_account_tx(primary)
         return
 
     if primary and (not primary.is_void) and _tx_minor(primary) != to_minor(amount or 0):
-        primary.is_void = True
+        _remove_account_tx(primary)
         primary = None
     if primary and primary.is_void:
+        _remove_account_tx(primary)
         primary = None
 
     if not primary:

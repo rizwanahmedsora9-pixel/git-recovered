@@ -264,15 +264,17 @@ def test_accounts_edit_and_void_update_both_sides_together(app, client, expense_
     )
     assert response.status_code in (302, 303)
     with app.app_context():
-        tx = db.session.get(AccountTransaction, tx_id)
-        entry = CashFlowEntry.query.one()
+        from models import AccountingAuditLog
+        from app.services.cash_flow_svc import collect_cash_flow_rows
+
+        assert db.session.get(AccountTransaction, tx_id) is None
+        assert CashFlowEntry.query.count() == 0
         account = db.session.get(Account, expense_setup["account_id"])
-        assert tx.is_void is True
-        assert entry.is_void is True
-        assert entry.void_reason == "Duplicate voucher"
         assert account.balance_minor == 1_000_000
-        assert CashFlowEntryAudit.query.filter_by(
-            entry_id=entry.id, action="Voided"
+        assert collect_cash_flow_rows("2026-11-09", "2026-11-09") == []
+        assert collect_cash_flow_rows("2026-11-09", "2026-11-09", include_voided=True) == []
+        assert AccountingAuditLog.query.filter_by(
+            entity_type="CashFlowEntry", action="Delete"
         ).count() == 1
 
 

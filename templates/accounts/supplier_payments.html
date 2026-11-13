@@ -94,7 +94,17 @@
                     <td class="text-end text-nowrap">
                         <a href="{{ url_for('download_supplier_payment', payment_id=p.id, action='print') }}" class="btn btn-outline-info btn-sm me-1" title="View"><i class="bi bi-eye"></i></a>
                         {% if meta.grn_payment %}
+                            {% if p.grn_id %}
                             <a href="{{ url_for('accounts.pay_grn', grn_id=p.grn_id) }}" class="btn btn-outline-success btn-sm me-1" title="Open the GRN payables (stock / GRN expenses)"><i class="bi bi-receipt"></i></a>
+                            {% endif %}
+                            {% if not payments_readonly and not p.is_void %}
+                            <form id="delSupplierPaymentForm{{ p.id }}" action="{{ url_for('accounts.supplier_payment_delete', id=p.id) }}" method="POST" class="d-inline"></form>
+                            <button type="button" class="btn btn-outline-danger btn-sm me-1" title="Delete" onclick="if(confirm('Delete this supplier payment? Its accounting effects will be reversed.')) { document.getElementById('delSupplierPaymentForm{{ p.id }}').submit(); }"><i class="bi bi-trash"></i></button>
+                            {% elif not payments_readonly and p.is_void %}
+                            <form action="{{ url_for('accounts.supplier_payment_restore', id=p.id) }}" method="POST" class="d-inline">
+                                <button class="btn btn-outline-success btn-sm me-1" title="Restore"><i class="bi bi-arrow-counterclockwise"></i></button>
+                            </form>
+                            {% endif %}
                         {% elif meta.source_type %}
                             <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled title="Controlled by {{ meta.source_type }} #{{ meta.source_id }}"><i class="bi bi-link-45deg"></i></button>
                             <button type="button" class="btn btn-outline-primary btn-sm me-1" title="Move the {{ meta.source_type }} #{{ meta.source_id }} behind this payment to another supplier"

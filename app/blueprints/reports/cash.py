@@ -638,7 +638,7 @@ def cash_flow():
     all_rows = collect_cash_flow_rows(
         from_date, to_date,
         posted_after=posted_after,
-        include_voided=(filter_status in ('voided', 'all')),
+        include_voided=(filter_status == 'voided'),
     )
     all_rows.sort(key=_cf_sort_key)
 
@@ -650,8 +650,10 @@ def cash_flow():
     })
     if export_scope == 'all' and (export_csv == '1' or export_pdf == '1'):
         display_rows = list(all_rows)
-        if filter_status in ('active', 'voided'):
-            display_rows = [r for r in display_rows if (r.get('status') or 'active') == filter_status]
+        if filter_status == 'voided':
+            display_rows = [r for r in display_rows if (r.get('status') or 'active') == 'voided']
+        else:
+            display_rows = [r for r in display_rows if (r.get('status') or 'active') == 'active']
 
     closing_balance = apply_running_balance(display_rows, opening_balance, account_id=filter_account_id)
     summary = summarize_cash_flow_rows(display_rows, account_id=filter_account_id)

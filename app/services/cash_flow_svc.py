@@ -879,36 +879,57 @@ def rename_cf_subcategory(subcategory_id, name, notes=None):
 
 def cf_used_category_ids():
     rows = db.session.query(CashFlowEntry.category_id).filter(
-        CashFlowEntry.category_id.isnot(None)
+        CashFlowEntry.category_id.isnot(None),
+        CashFlowEntry.is_void == False,
     ).distinct().all()
     return {row[0] for row in rows}
 
 
 def cf_used_subcategory_ids():
     rows = db.session.query(CashFlowEntry.subcategory_id).filter(
-        CashFlowEntry.subcategory_id.isnot(None)
+        CashFlowEntry.subcategory_id.isnot(None),
+        CashFlowEntry.is_void == False,
     ).distinct().all()
     return {row[0] for row in rows}
 
 
 def cf_used_party_ids():
     rows = db.session.query(CashFlowEntry.party_id).filter(
-        CashFlowEntry.party_id.isnot(None)
+        CashFlowEntry.party_id.isnot(None),
+        CashFlowEntry.is_void == False,
     ).distinct().all()
     return {row[0] for row in rows}
 
 
 def _cf_category_is_used(category_id):
-    if CashFlowEntry.query.filter(CashFlowEntry.category_id == category_id).first():
+    if CashFlowEntry.query.filter(
+        CashFlowEntry.category_id == category_id,
+        CashFlowEntry.is_void == False,
+    ).first():
         return True
     sub_ids = [
         row[0] for row in db.session.query(CashFlowSubcategory.id).filter(
             CashFlowSubcategory.category_id == category_id
         ).all()
     ]
-    if sub_ids and CashFlowEntry.query.filter(CashFlowEntry.subcategory_id.in_(sub_ids)).first():
+    if sub_ids and CashFlowEntry.query.filter(
+        CashFlowEntry.subcategory_id.in_(sub_ids),
+        CashFlowEntry.is_void == False,
+    ).first():
         return True
     return False
+
+
+def _purge_voided_cf_entries(filter_cond):
+    void_ids = [
+        r[0] for r in db.session.query(CashFlowEntry.id).filter(
+            CashFlowEntry.is_void == True,
+            filter_cond,
+        ).all()
+    ]
+    if void_ids:
+        CashFlowEntryAudit.query.filter(CashFlowEntryAudit.entry_id.in_(void_ids)).delete(synchronize_session=False)
+        CashFlowEntry.query.filter(CashFlowEntry.id.in_(void_ids)).delete(synchronize_session=False)
 
 
 def delete_cf_category(category_id):
@@ -917,7 +938,10 @@ def delete_cf_category(category_id):
     if not cat:
         raise ValueError('Category not found.')
     linked_modules = []
-    if CashFlowEntry.query.filter(CashFlowEntry.category_id == cat.id).first():
+    if CashFlowEntry.query.filter(
+        CashFlowEntry.category_id == cat.id,
+        CashFlowEntry.is_void == False,
+    ).first():
         linked_modules.append('CashFlowEntry')
     sub_ids = [
         row[0] for row in db.session.query(CashFlowSubcategory.id).filter(
@@ -925,7 +949,10 @@ def delete_cf_category(category_id):
         ).all()
     ]
     if sub_ids:
-        if CashFlowEntry.query.filter(CashFlowEntry.subcategory_id.in_(sub_ids)).first():
+        if CashFlowEntry.query.filter(
+            CashFlowEntry.subcategory_id.in_(sub_ids),
+            CashFlowEntry.is_void == False,
+        ).first():
             linked_modules.append('CashFlowEntry (via subcategory)')
         # If subcategories exist but are not directly linked to entries,
         # deleting the category will cascade-remove them (clear link message)
@@ -935,6 +962,10 @@ def delete_cf_category(category_id):
         msg = 'This category is linked to: ' + ', '.join(linked_modules) if linked_modules else 'This category is used by historical transactions.'
         msg += ' Cannot delete — disable it instead, or delete from the linked modules first.'
         raise ValueError(msg)
+    if sub_ids:
+        _purge_voided_cf_entries(or_(CashFlowEntry.category_id == cat.id, CashFlowEntry.subcategory_id.in_(sub_ids)))
+    else:
+        _purge_voided_cf_entries(CashFlowEntry.category_id == cat.id)
     CashFlowSubcategory.query.filter(CashFlowSubcategory.category_id == cat.id).delete(
         synchronize_session=False
     )
@@ -949,12 +980,16 @@ def delete_cf_subcategory(subcategory_id):
     if not sub:
         raise ValueError('Sub-category not found.')
     linked_modules = []
-    if CashFlowEntry.query.filter(CashFlowEntry.subcategory_id == sub.id).first():
+    if CashFlowEntry.query.filter(
+        CashFlowEntry.subcategory_id == sub.id,
+        CashFlowEntry.is_void == False,
+    ).first():
         linked_modules.append('CashFlowEntry')
     if linked_modules:
         msg = 'This sub-category is linked to: ' + ', '.join(linked_modules)
         msg += '. Cannot delete — disable it instead, or delete from the linked modules first.'
         raise ValueError(msg)
+    _purge_voided_cf_entries(CashFlowEntry.subcategory_id == sub.id)
     db.session.delete(sub)
     db.session.flush()
     return True
@@ -966,12 +1001,16 @@ def delete_cf_party(party_id):
     if not party:
         raise ValueError('Party not found.')
     linked_modules = []
-    if CashFlowEntry.query.filter(CashFlowEntry.party_id == party.id).first():
+    if CashFlowEntry.query.filter(
+        CashFlowEntry.party_id == party.id,
+        CashFlowEntry.is_void == False,
+    ).first():
         linked_modules.append('CashFlowEntry')
     if linked_modules:
         msg = 'This party is linked to: ' + ', '.join(linked_modules)
         msg += '. Cannot delete — disable it instead, or delete from the linked modules first.'
         raise ValueError(msg)
+    _purge_voided_cf_entries(CashFlowEntry.party_id == party.id)
     db.session.delete(party)
     db.session.flush()
     return True
@@ -1309,30 +1348,53 @@ def update_manual_cash_flow_entry(
 
 
 def void_manual_cash_flow_entry(entry, reason=None, actor=None):
-    from app.services.accounting import _void_account_tx
+    from app.services.accounting import _reverse_account_tx_effect
+    from utils.accounting_audit import record_accounting_audit
 
     if entry is None:
         raise ValueError('Entry not found.')
     if entry.is_void:
         raise ValueError('This transaction is already voided.')
     before = _cf_snapshot(entry)
+    entry_id = entry.id
+    entry_amount = float(entry.amount or 0)
+    entry_account_id = entry.account_id
+    reason_val = (reason or '').strip() or None
     tx = db.session.get(AccountTransaction, entry.account_tx_id) if entry.account_tx_id else None
+    if not tx and entry_id:
+        tx = AccountTransaction.query.filter_by(source_type='CashFlowEntry', source_id=entry_id).first()
     if tx:
         for account_id in {tx.from_account_id, tx.to_account_id}:
             _cf_assert_open_period(account_id, tx.date_posted, operation='voided')
+    else:
+        for account_id in {entry.account_id, entry.destination_account_id}:
+            if account_id:
+                _cf_assert_open_period(account_id, entry.date_posted, operation='voided')
     if tx and not tx.is_void:
-        _void_account_tx(tx)
-        tx.voided_by = _cf_actor_name(actor)
-        tx.voided_at = pk_now()
+        _reverse_account_tx_effect(tx)
+        tx.is_void = True
     entry.is_void = True
-    entry.voided_at = pk_now()
-    entry.voided_by = _cf_actor_name(actor)
-    entry.void_reason = (reason or '').strip() or None
-    entry.updated_by = _cf_actor_name(actor)
-    entry.updated_at = pk_now()
-    entry.revision = int(entry.revision or 1) + 1
-    _cf_write_audit(entry, 'Voided', before=before, after=_cf_snapshot(entry), reason=reason, actor=actor)
+    entry.void_reason = reason_val
+    record_accounting_audit(
+        actor,
+        action='Delete',
+        entity_type='CashFlowEntry',
+        entity_id=entry_id,
+        before=before,
+        after={**before, 'deleted': True, 'void_reason': reason_val},
+        amount_before=entry_amount,
+        amount_after=0,
+        account_before_id=entry_account_id,
+        reason=reason_val,
+    )
+    CashFlowEntryAudit.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    db.session.delete(entry)
     db.session.flush()
+    if tx:
+        CashFlowEntry.query.filter_by(account_tx_id=tx.id).update({'account_tx_id': None}, synchronize_session=False)
+        LoanMovement.query.filter_by(account_tx_id=tx.id).update({'account_tx_id': None}, synchronize_session=False)
+        db.session.delete(tx)
+        db.session.flush()
     return entry
 
 
@@ -1421,7 +1483,7 @@ def _cf_is_mirror_tx(tx):
     return any(marker in note_u for marker in _MIRROR_MARKERS)
 
 
-def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voided=True):
+def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voided=False):
     rows = []
     account_by_id = {a.id: a for a in Account.query.all()}
     cash_bank_ids = {a.id for a in account_by_id.values() if (a.category or '').lower() in ('cash', 'bank')}
@@ -1442,7 +1504,18 @@ def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voi
     if not include_voided:
         tx_q = tx_q.filter(AccountTransaction.is_void == False)
 
-    cf_entries = {e.account_tx_id: e for e in CashFlowEntry.query.filter(CashFlowEntry.account_tx_id.isnot(None)).all()}
+    cf_q = CashFlowEntry.query.filter(CashFlowEntry.account_tx_id.isnot(None))
+    if not include_voided:
+        cf_q = cf_q.filter(CashFlowEntry.is_void == False)
+    cf_entries = {e.account_tx_id: e for e in cf_q.all()}
+    void_cf_tx_ids = set()
+    if not include_voided:
+        void_cf_tx_ids = {
+            r[0] for r in db.session.query(CashFlowEntry.account_tx_id).filter(
+                CashFlowEntry.account_tx_id.isnot(None),
+                CashFlowEntry.is_void == True,
+            ).all()
+        }
 
     txs = tx_q.all()
     # Who made each entry: the ledger row may have been written by a sync helper
@@ -1464,6 +1537,8 @@ def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voi
                     loan_refs[int(mid)] = mref.strip()
 
     for tx in txs:
+        if not include_voided and tx.id in void_cf_tx_ids:
+            continue
         from_acc = account_by_id.get(tx.from_account_id)
         to_acc = account_by_id.get(tx.to_account_id)
         
@@ -1583,7 +1658,7 @@ def collect_cash_flow_rows(from_date, to_date, *, posted_after=None, include_voi
                 tx.transaction_type,
                 default=(CF_SECTION_CASH_FLOW if e else CF_SECTION_ACCOUNTS),
             ),
-            'status': 'voided' if tx.is_void else 'active',
+            'status': 'voided' if (tx.is_void or (e and e.is_void)) else 'active',
             'grn_id': getattr(tx, 'grn_id', None),
             'entry_id': e.id if e else None,
             'tx_id': tx.id,
@@ -1649,8 +1724,10 @@ def filter_cash_flow_rows(rows, filters):
     if created_by:
         out = [r for r in out if created_by in (r.get('created_by') or '').lower()]
     status = (filters.get('status') or 'active').strip().lower()
-    if status in ('active', 'voided'):
-        out = [r for r in out if (r.get('status') or 'active') == status]
+    if status == 'voided':
+        out = [r for r in out if (r.get('status') or 'active') == 'voided']
+    else:
+        out = [r for r in out if (r.get('status') or 'active') == 'active']
     try:
         amin = filters.get('amount_min')
         if amin not in (None, ''):

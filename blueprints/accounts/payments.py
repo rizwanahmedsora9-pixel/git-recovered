@@ -371,6 +371,7 @@ def expenditures():
         if flow and flow.party_name:
             note_parts.append(f'Recipient: {flow.party_name}')
         all_expenditures.append({
+            'tx_id': tx.id,
             'date_posted': tx.date_posted,
             'category': category,
             'amount': float(tx.amount or 0),

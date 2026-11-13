@@ -60,7 +60,7 @@ def void_transaction(tx_id):
 @accounts_bp.route('/transactions/<int:tx_id>/delete', methods=['POST'])
 @login_required
 def delete_account_transaction(tx_id):
-    """Soft-void an entry or delegate to its canonical source record."""
+    """Delete an account entry and clean its linked Cash Flow and source records."""
     tx = AccountTransaction.query.get_or_404(tx_id)
     try:
         from app.services.system_accounts import is_reserved_account, is_legacy_loan_account, account_is_reconciliation_source
@@ -75,60 +75,162 @@ def delete_account_transaction(tx_id):
         source_type = (tx.source_type or '').strip()
         source_id = tx.source_id
         note_txt = tx.note or ''
+        reason_txt = (request.form.get('void_reason') or request.form.get('reason') or tx.note or '').strip()
         if not source_type:
             pay_match = re.search(r'\[SRC:(?:Payment|ClientRefund):(\d+)\]', note_txt, flags=re.IGNORECASE)
             sp_match = re.search(r'\[SRC:SupplierPayment:(\d+)\]', note_txt, flags=re.IGNORECASE)
+            gp_match = re.search(r'\[SRC:GRN_PAYMENT:(\d+)\]', note_txt, flags=re.IGNORECASE)
+            dp_match = re.search(r'\[SRC:DeliveryPersonPayment:(\d+)\]', note_txt, flags=re.IGNORECASE)
+            cf_match = re.search(r'\[SRC:CashFlow:(\d+)\]', note_txt, flags=re.IGNORECASE)
+            ds_match = re.search(r'\[SRC:DirectSale:(\d+)\]', note_txt, flags=re.IGNORECASE)
+            bk_match = re.search(r'\[SRC:Booking:(\d+)\]', note_txt, flags=re.IGNORECASE)
             if pay_match:
                 source_type, source_id = 'Payment', int(pay_match.group(1))
             elif sp_match:
                 source_type, source_id = 'SupplierPayment', int(sp_match.group(1))
+            elif gp_match:
+                source_type, source_id = 'GRN_PAYMENT', int(gp_match.group(1))
+            elif dp_match:
+                source_type, source_id = 'DeliveryPersonPayment', int(dp_match.group(1))
+            elif cf_match:
+                source_type, source_id = 'CashFlowEntry', int(cf_match.group(1))
+            elif ds_match:
+                source_type, source_id = 'DirectSale', int(ds_match.group(1))
+            elif bk_match:
+                source_type, source_id = 'Booking', int(bk_match.group(1))
+
+        from app.services.accounting import _remove_account_tx
+        from app.services.payments_crud import _assert_day_open, _assert_period_open
+        from utils.accounting_audit import record_accounting_audit
+
+        linked_cf = CashFlowEntry.query.filter_by(account_tx_id=tx.id).first()
+        if linked_cf and source_type not in ('Payment', 'SupplierPayment', 'GRN_PAYMENT', 'DeliveryPersonPayment', 'DirectSale', 'Booking'):
+            source_type = 'CashFlowEntry'
+            source_id = source_id or linked_cf.id
 
         if source_type == 'Payment' and source_id:
             from app.services.payments_crud import delete_client_payment
-            payment = db.session.get(Payment, source_id)
-            if not payment or not delete_client_payment(payment, actor=current_user):
-                raise ValueError('The linked payment is already deleted or missing.')
+            payment = db.session.get(Payment, int(source_id))
+            if payment and not payment.is_void:
+                delete_client_payment(payment, actor=current_user)
+            else:
+                for account_id in {tx.from_account_id, tx.to_account_id}:
+                    _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                    _assert_day_open(account_id, tx.date_posted, operation='deleted')
+                _remove_account_tx(tx)
         elif source_type == 'SupplierPayment' and source_id:
             from app.services.payments_crud import delete_supplier_payment
-            payment = db.session.get(SupplierPayment, source_id)
-            if not payment or not delete_supplier_payment(payment, actor=current_user):
-                raise ValueError('The linked supplier payment is already deleted or missing.')
-        elif source_type == 'CashFlowEntry':
-            # The ledger row and its category/party metadata must change as one
-            # document.  Voiding only AccountTransaction would leave Cash Flow
-            # and its audit trail disagreeing with the account balance.
-            from app.services.cash_flow_svc import void_manual_cash_flow_entry
-            entry = CashFlowEntry.query.filter_by(account_tx_id=tx.id).first()
-            if not entry:
-                raise ValueError('The linked Cash Flow entry is missing; no balance was changed.')
-            void_manual_cash_flow_entry(
-                entry, reason=(request.form.get('void_reason') or tx.note),
-                actor=current_user,
-            )
-        else:
-            from app.services.accounting import _void_account_tx
-            from app.services.payments_crud import _assert_period_open
-            from utils.accounting_audit import record_accounting_audit
-            if tx.is_void:
-                raise ValueError('This account entry is already deleted.')
+            payment = db.session.get(SupplierPayment, int(source_id))
+            if payment and not payment.is_void:
+                delete_supplier_payment(payment, actor=current_user)
+            else:
+                for account_id in {tx.from_account_id, tx.to_account_id}:
+                    _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                    _assert_day_open(account_id, tx.date_posted, operation='deleted')
+                _remove_account_tx(tx)
+        elif source_type == 'GRN_PAYMENT' and source_id:
+            from app.services.grn_payments import void_grn_payment
+            payment = db.session.get(SupplierPayment, int(source_id))
+            if payment and not payment.is_void:
+                void_grn_payment(payment, actor=current_user, reason=reason_txt)
+            else:
+                for account_id in {tx.from_account_id, tx.to_account_id}:
+                    _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                    _assert_day_open(account_id, tx.date_posted, operation='deleted')
+                _remove_account_tx(tx)
+        elif source_type == 'DeliveryPersonPayment' and source_id:
+            from app.services.driver_payments import delete_driver_payment
+            payment = db.session.get(DeliveryPersonPayment, int(source_id))
+            if payment and not payment.is_void:
+                delete_driver_payment(payment, actor=current_user)
+            else:
+                for account_id in {tx.from_account_id, tx.to_account_id}:
+                    _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                    _assert_day_open(account_id, tx.date_posted, operation='deleted')
+                _remove_account_tx(tx)
+        elif source_type == 'DirectSale' and source_id:
             for account_id in {tx.from_account_id, tx.to_account_id}:
                 _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                _assert_day_open(account_id, tx.date_posted, operation='deleted')
+            sale = db.session.get(DirectSale, int(source_id))
+            if sale:
+                sale.paid_amount = 0
+                sale.payment_account_id = None
+                from app.services.void_rebuild import _sync_direct_sale_pending_bill
+                _sync_direct_sale_pending_bill(sale)
             before = {'id': tx.id, 'type': tx.transaction_type, 'amount': tx.amount,
                       'from_account_id': tx.from_account_id, 'to_account_id': tx.to_account_id,
                       'description': tx.description, 'note': tx.note, 'is_void': False}
-            _void_account_tx(tx)
-            tx.voided_by = getattr(current_user, 'username', None)
-            tx.voided_at = pk_now()
             record_accounting_audit(
                 current_user, action='Delete', entity_type='AccountTransaction', entity_id=tx.id,
-                before=before, after={**before, 'is_void': True},
+                before=before, after={**before, 'deleted': True},
                 amount_before=tx.amount, amount_after=0,
                 account_before_id=tx.from_account_id or tx.to_account_id,
-                reason=tx.note,
+                reason=reason_txt,
             )
+            _remove_account_tx(tx)
+        elif source_type == 'Booking' and source_id:
+            for account_id in {tx.from_account_id, tx.to_account_id}:
+                _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                _assert_day_open(account_id, tx.date_posted, operation='deleted')
+            booking = db.session.get(Booking, int(source_id))
+            if booking:
+                booking.paid_amount = 0
+                booking.receive_in_account_id = None
+                from app.services.void_rebuild import _sync_booking_pending_bill
+                _sync_booking_pending_bill(booking)
+            before = {'id': tx.id, 'type': tx.transaction_type, 'amount': tx.amount,
+                      'from_account_id': tx.from_account_id, 'to_account_id': tx.to_account_id,
+                      'description': tx.description, 'note': tx.note, 'is_void': False}
+            record_accounting_audit(
+                current_user, action='Delete', entity_type='AccountTransaction', entity_id=tx.id,
+                before=before, after={**before, 'deleted': True},
+                amount_before=tx.amount, amount_after=0,
+                account_before_id=tx.from_account_id or tx.to_account_id,
+                reason=reason_txt,
+            )
+            _remove_account_tx(tx)
+        elif source_type == 'CashFlowEntry':
+            from app.services.cash_flow_svc import void_manual_cash_flow_entry
+            entry = linked_cf or (db.session.get(CashFlowEntry, int(source_id)) if source_id else None)
+            if entry:
+                void_manual_cash_flow_entry(
+                    entry, reason=reason_txt,
+                    actor=current_user,
+                )
+            else:
+                for account_id in {tx.from_account_id, tx.to_account_id}:
+                    _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                    _assert_day_open(account_id, tx.date_posted, operation='deleted')
+                before = {'id': tx.id, 'type': tx.transaction_type, 'amount': tx.amount,
+                          'from_account_id': tx.from_account_id, 'to_account_id': tx.to_account_id,
+                          'description': tx.description, 'note': tx.note, 'is_void': False}
+                record_accounting_audit(
+                    current_user, action='Delete', entity_type='AccountTransaction', entity_id=tx.id,
+                    before=before, after={**before, 'deleted': True},
+                    amount_before=tx.amount, amount_after=0,
+                    account_before_id=tx.from_account_id or tx.to_account_id,
+                    reason=reason_txt,
+                )
+                _remove_account_tx(tx)
+        else:
+            for account_id in {tx.from_account_id, tx.to_account_id}:
+                _assert_period_open(account_id, tx.date_posted, operation='deleted')
+                _assert_day_open(account_id, tx.date_posted, operation='deleted')
+            before = {'id': tx.id, 'type': tx.transaction_type, 'amount': tx.amount,
+                      'from_account_id': tx.from_account_id, 'to_account_id': tx.to_account_id,
+                      'description': tx.description, 'note': tx.note, 'is_void': False}
+            record_accounting_audit(
+                current_user, action='Delete', entity_type='AccountTransaction', entity_id=tx.id,
+                before=before, after={**before, 'deleted': True},
+                amount_before=tx.amount, amount_after=0,
+                account_before_id=tx.from_account_id or tx.to_account_id,
+                reason=reason_txt,
+            )
+            _remove_account_tx(tx)
         _audit_pending_account_transactions()
         db.session.commit()
-        flash('Account entry reversed. The original record and audit history were retained.', 'success')
+        flash('Account entry deleted and balances reversed.', 'success')
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), 'danger')
@@ -312,17 +414,21 @@ def add_transaction():
                 if not receive_source_label:
                     raise ValueError('Please enter who or what this money was received from.')
 
-                receive_account.balance = float(receive_account.balance or 0) + amount
+                from app.services.accounting import _apply_account_tx_effect
+                from utils.money import to_minor
                 account_tx = AccountTransaction(
                     from_account_id=None,
                     to_account_id=receive_account.id,
                     amount=amount,
+                    amount_minor=to_minor(amount),
                     description=f"Money received from {receive_source_label}",
                     note=note,
                     transaction_type='Receipt',
                     date_posted=tx_date
                 )
                 db.session.add(account_tx)
+                db.session.flush()
+                _apply_account_tx_effect(account_tx)
                 audit_log(current_user, 'account.transaction.receive', f'source_category=other_source, source={receive_source_label}, to={receive_account.name}, amount={amount}')
 
             else:
@@ -347,19 +453,21 @@ def add_transaction():
                 if not is_loan_source and float(from_account.balance or 0) < amount:
                     raise ValueError('Insufficient balance in selected source account.')
 
-                # For normal accounts this subtracts the amount; for Loan accounts this will produce a MORE NEGATIVE balance
-                from_account.balance = float(from_account.balance or 0) - amount
-                receive_account.balance = float(receive_account.balance or 0) + amount
+                from app.services.accounting import _apply_account_tx_effect
+                from utils.money import to_minor
                 account_tx = AccountTransaction(
                     from_account_id=from_account.id,
                     to_account_id=receive_account.id,
                     amount=amount,
+                    amount_minor=to_minor(amount),
                     description=f"Funds received from account {from_account.name}",
                     note=note,
                     transaction_type='Transfer',
                     date_posted=tx_date
                 )
                 db.session.add(account_tx)
+                db.session.flush()
+                _apply_account_tx_effect(account_tx)
                 audit_log(current_user, 'account.transaction.receive', f'source_category={category_exists.name}, from={from_account.name}, to={receive_account.name}, amount={amount}')
 
             _audit_pending_account_transactions()
@@ -380,7 +488,7 @@ def add_transaction():
                 return redirect(url_for('accounts.grn_payments', **({
                     'grn_id': grn_id, 'mode': 'EXPENSES'} if grn_id else {})))
             from_account_id = request.form.get('pay_from_account_id', type=int)
-            to_account_id = request.form.get('pay_to_account_id', type=int)
+            to_account_id = request.form.get('pay_to_account_id', type=int) or request.form.get('transfer_to_account_id', type=int)
             pay_target = (request.form.get('pay_target') or '').strip().lower()
             amount = float(request.form.get('amount', 0) or 0)
 
@@ -395,24 +503,27 @@ def add_transaction():
                 raise ValueError('Insufficient balance in selected source account.')
 
             if pay_target == 'company_transfer':
-                from_account.balance = _money_round(float(from_account.balance or 0) - amount)
                 to_account = Account.query.get(to_account_id) if to_account_id else None
                 if not _is_account_active(to_account):
                     raise ValueError('Please select a valid destination account.')
                 if to_account.id == from_account.id:
                     raise ValueError('Source and destination accounts cannot be the same.')
 
-                to_account.balance = float(to_account.balance or 0) + amount
+                from app.services.accounting import _apply_account_tx_effect
+                from utils.money import to_minor
                 tx = AccountTransaction(
                     from_account_id=from_account.id,
                     to_account_id=to_account.id,
                     amount=amount,
+                    amount_minor=to_minor(amount),
                     description='Intra-company transfer',
                     note=note,
                     transaction_type='Transfer',
                     date_posted=tx_date
                 )
                 db.session.add(tx)
+                db.session.flush()
+                _apply_account_tx_effect(tx)
                 audit_log(current_user, 'account.transaction.transfer', f'from={from_account.name}, to={to_account.name}, amount={amount}')
                 flash('Transfer transaction recorded successfully.', 'success')
 
@@ -560,18 +671,22 @@ def add_transaction():
                     else:
                         target_label = 'Other Payment'
 
-                from_account.balance = _money_round(float(from_account.balance or 0) - amount)
+                from app.services.accounting import _apply_account_tx_effect
+                from utils.money import to_minor
                 tx_type = 'Expense' if pay_target in ['personal_expense', 'other_expense'] else 'Payment'
                 tx = AccountTransaction(
                     from_account_id=from_account.id,
                     to_account_id=None,
                     amount=amount,
+                    amount_minor=to_minor(amount),
                     description=target_label,
                     note=note,
                     transaction_type=tx_type,
                     date_posted=tx_date
                 )
                 db.session.add(tx)
+                db.session.flush()
+                _apply_account_tx_effect(tx)
                 audit_log(current_user, 'account.transaction.pay', f'from={from_account.name}, target={target_label}, amount={amount}')
                 flash('Outgoing payment recorded successfully.', 'success')
 

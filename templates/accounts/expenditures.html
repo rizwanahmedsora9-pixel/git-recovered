@@ -68,6 +68,7 @@
                 <thead><tr>
                     <th style="width:140px">Date</th><th>Category</th>
                     <th class="text-end">Amount</th><th>Method</th><th>Note</th>
+                    <th class="text-end" style="width:80px">Action</th>
                 </tr></thead>
                 <tbody>
                 {% for e in expenditures.items %}
@@ -77,9 +78,16 @@
                     <td class="text-end fw-bold text-warning">Rs. {{ "%.2f"|format(e.amount) }}</td>
                     <td><span class="badge bg-secondary">{{ e.method or 'Cash' }}</span></td>
                     <td class="small text-muted">{{ e.note or '' }}</td>
+                    <td class="text-end">
+                        {% if e.tx_id %}
+                        <form method="POST" action="{{ url_for('accounts.void_transaction', tx_id=e.tx_id) }}" style="display:inline" onsubmit="return confirm('Permanently delete this expenditure? Account balances will be reversed.');">
+                            <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-x-octagon"></i></button>
+                        </form>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" class="text-center text-muted py-4">No expenditures in this range.</td></tr>
+                <tr><td colspan="6" class="text-center text-muted py-4">No expenditures in this range.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

@@ -789,6 +789,9 @@ def delete_supplier_payment(payment, actor=None) -> bool:
     if payment.is_void:
         return False
     source_type, source_id = _supplier_payment_source(payment)
+    if source_type == "GRN_PAYMENT":
+        from app.services.grn_payments import void_grn_payment
+        return bool(void_grn_payment(payment, actor=actor))
     if source_type:
         raise ValueError(f"This payment is controlled by {source_type} #{source_id}; delete/reverse it there.")
     _assert_period_open(payment.payment_account_id, payment.date_posted, operation="deleted")
@@ -817,6 +820,9 @@ def restore_supplier_payment(payment, actor=None) -> bool:
     if not payment.is_void:
         return False
     source_type, source_id = _supplier_payment_source(payment)
+    if source_type == "GRN_PAYMENT":
+        from app.services.grn_payments import restore_grn_payment
+        return bool(restore_grn_payment(payment, actor=actor))
     if source_type:
         raise ValueError(f"This payment is controlled by {source_type} #{source_id}; restore it there.")
     _assert_period_open(payment.payment_account_id, payment.date_posted, operation="restored")

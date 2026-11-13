@@ -692,9 +692,8 @@ def hard_delete_transaction(kind, obj_id):
         tx = db.session.get(AccountTransaction, obj_id)
         if not tx:
             return False
-        if not tx.is_void:
-            _reverse_account_tx_effect(tx)
-        db.session.delete(tx)
+        from app.services.accounting import _remove_account_tx
+        _remove_account_tx(tx)
         deleted = True
     if deleted:
         _rebuild_material_totals()
