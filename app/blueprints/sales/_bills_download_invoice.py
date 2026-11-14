@@ -94,7 +94,7 @@ def _translate_material_ur(raw_name, names_map, alt_mode='both'):
             return booked_ur
         if alt_mode == 'delivered':
             return deliv_ur
-        return f"{deliv_ur} (بجائے {booked_ur})"
+        return deliv_ur
     return urdu_name(text, names_map.get(text.casefold(), ''))
 
 
