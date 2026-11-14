@@ -1545,3 +1545,30 @@ def test_booking_delivery_invoice_and_payment_e2e_urdu_receipt(client, app):
     assert 'بک شدہ فروخت کا خلاصہ' in verify_html
     assert 'ڈیلیوری پرسن' in verify_html
     assert 'Meezan Main UrduTest' in verify_html
+
+
+def test_urdu_alt_material_name_modes():
+    """The print dialog picks how an alternate-material line is named."""
+    from werkzeug.datastructures import MultiDict
+    from app.blueprints.sales._bills_download_invoice import (
+        _translate_material_ur, _urdu_alt_name_mode, _with_urdu_item_names)
+
+    names = {'steel 20mm': 'بیس ملی میٹر', 'steel 12mm': 'بارہ ملی میٹر'}
+    label = 'Steel 20mm (ALT for booked Steel 12mm)'
+    both = _translate_material_ur(label, names)
+    booked = _translate_material_ur(label, names, 'booked')
+    delivered = _translate_material_ur(label, names, 'delivered')
+    assert 'بجائے' in both and delivered in both and booked in both
+    assert both == _translate_material_ur(label, names, 'both')
+    assert 'بجائے' not in booked and 'بجائے' not in delivered
+    assert booked == _translate_material_ur('Steel 12mm', names)
+    assert delivered == _translate_material_ur('Steel 20mm', names)
+    # A normal (non-alternate) line is the same in every mode.
+    plain = _translate_material_ur('Steel 12mm', names)
+    assert _translate_material_ur('Steel 12mm', names, 'delivered') == plain
+
+    assert _urdu_alt_name_mode(MultiDict()) == 'both'
+    assert _urdu_alt_name_mode(MultiDict([('alt_name', 'junk')])) == 'both'
+    assert _urdu_alt_name_mode(MultiDict([('alt_name', 'Booked')])) == 'booked'
+    assert _urdu_alt_name_mode(MultiDict([('alt_name', 'delivered')])) == 'delivered'
+    assert _with_urdu_item_names([], 'ur', 'booked') == []

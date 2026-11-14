@@ -53,6 +53,34 @@
                     </div>
                 </div>
 
+                <div class="mb-3 border rounded p-2 bg-dark-subtle">
+                    <div class="small text-warning fw-bold text-uppercase mb-1">
+                        <i class="bi bi-arrow-left-right me-1"></i> Alternative material name
+                    </div>
+                    <div class="text-white-50 small mb-2">
+                        Only matters when an alternative material was delivered against a booking.
+                        Changes the printed name only.
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="urduAltName" id="urduAltBooked" value="booked">
+                        <label class="form-check-label text-white" for="urduAltBooked">
+                            Booked item name only
+                        </label>
+                    </div>
+                    <div class="form-check mt-1">
+                        <input class="form-check-input" type="radio" name="urduAltName" id="urduAltDelivered" value="delivered">
+                        <label class="form-check-label text-white" for="urduAltDelivered">
+                            Delivered item name only
+                        </label>
+                    </div>
+                    <div class="form-check mt-1">
+                        <input class="form-check-input" type="radio" name="urduAltName" id="urduAltBoth" value="both" checked>
+                        <label class="form-check-label text-white fw-bold" for="urduAltBoth">
+                            Both — delivered <bdi dir="rtl">(بجائے booked)</bdi>
+                        </label>
+                    </div>
+                </div>
+
                 <div id="urduTcOptions" class="mb-3 border rounded p-2 bg-dark-subtle">
                     <div class="small text-warning fw-bold text-uppercase mb-2">
                         <i class="bi bi-menu-button-wide me-1"></i> Choose terms to display (Urdu receipt only)
@@ -314,6 +342,8 @@
             // Optional sheet sections: send an explicit 1/0 for each so the
             // server never has to guess an unchecked box apart from an old
             // link (where a missing key means "show", the approved sheet).
+            var altName = document.querySelector('input[name="urduAltName"]:checked');
+            url += '&alt_name=' + (altName ? altName.value : 'both');
             sectionBoxes.forEach(function (cb) {
                 url += '&' + cb.dataset.urduSection + '=' +
                        (cb.checked ? '1' : '0');
@@ -344,6 +374,8 @@
                 // Nothing is remembered between receipts: every dialog starts
                 // from the full approved sheet.
                 setAllSections(true);
+                var altBoth = document.getElementById('urduAltBoth');
+                if (altBoth) { altBoth.checked = true; }
                 modal.show();
             });
         });
