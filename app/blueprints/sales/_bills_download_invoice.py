@@ -32,6 +32,20 @@ def _urdu_section_flags(args):
     return flags
 
 
+_ALT_NAME_MODES = ('both', 'booked', 'delivered')
+
+
+def _urdu_alt_name_mode(args):
+    """How an alternate-material line is named on the Urdu receipt.
+
+    ``both`` (the default, and what any old link without the parameter gets)
+    prints "delivered (بجائے booked)"; ``booked`` and ``delivered`` print just
+    that one name.  Display only - nothing is stored or recomputed.
+    """
+    value = (args.get('alt_name') or '').strip().lower()
+    return value if value in _ALT_NAME_MODES else 'both'
+
+
 def _material_urdu_names():
     """``{english material name (casefolded): urdu name}`` for printed bills.
 
@@ -61,8 +75,12 @@ def _field(item, *names, default=None):
     return default
 
 
-def _translate_material_ur(raw_name, names_map):
-    """Translate a material name (including alternate-material labels) to Urdu."""
+def _translate_material_ur(raw_name, names_map, alt_mode='both'):
+    """Translate a material name (including alternate-material labels) to Urdu.
+
+    ``alt_mode`` picks what an alternate-material label prints: ``both``
+    (delivered, then the booked name in brackets), ``booked`` or ``delivered``.
+    """
     text = str(raw_name or '').strip()
     if not text:
         return ''
@@ -72,11 +90,15 @@ def _translate_material_ur(raw_name, names_map):
         booked_raw = alt_match.group(2).strip()
         deliv_ur = urdu_name(deliv_raw, names_map.get(deliv_raw.casefold(), ''))
         booked_ur = urdu_name(booked_raw, names_map.get(booked_raw.casefold(), ''))
+        if alt_mode == 'booked':
+            return booked_ur
+        if alt_mode == 'delivered':
+            return deliv_ur
         return f"{deliv_ur} (بجائے {booked_ur})"
     return urdu_name(text, names_map.get(text.casefold(), ''))
 
 
-def _with_urdu_item_names(items, lang):
+def _with_urdu_item_names(items, lang, alt_mode='both'):
     """Return bill rows with ``name_ur`` filled from the material catalogue."""
     rows = []
     names = _material_urdu_names() if lang == 'ur' else {}
@@ -87,7 +109,7 @@ def _with_urdu_item_names(items, lang):
         if lang == 'ur':
             urdu = str(_field(item, 'name_ur', default='') or '').strip()
             if not urdu:
-                urdu = _translate_material_ur(name, names)
+                urdu = _translate_material_ur(name, names, alt_mode)
             else:
                 urdu = urdu_name(name, urdu)
         rows.append({
@@ -563,7 +585,7 @@ def _urdu_driver_name(bill):
     return urdu_name(driver_name, getattr(driver, 'name_ur', None)), driver_name
 
 
-def urdu_bill_data(source, *, show_terms=False, terms=None):
+def urdu_bill_data(source, *, show_terms=False, terms=None, alt_mode='both'):
     """Urdu names, items and terms for one :func:`bill_document_source` result.
 
     Pure read: it fills in the Urdu item names the sheet prints, translates the
@@ -573,7 +595,7 @@ def urdu_bill_data(source, *, show_terms=False, terms=None):
     """
     bill_obj = source['bill']
     client = source['client']
-    items = _with_urdu_item_names(source['items'], 'ur')
+    items = _with_urdu_item_names(source['items'], 'ur', alt_mode)
     delivery_people = source['delivery_people']
     client_name_ur = ''
     if client is not None:
@@ -688,6 +710,7 @@ def download_invoice(bill_no):
     show_terms_ur = False
     selected_terms_ur = []
     sections_ur = {key: True for key in _URDU_SECTION_KEYS}
+    alt_mode_ur = 'both'
     if lang == 'ur' and 'tc' not in request.args:
         return render_template(
             'urdu_terms_confirm.html',
@@ -716,11 +739,12 @@ def download_invoice(bill_no):
             show_terms_ur = True
             selected_terms_ur = get_selected_terms(tc_ids)
         sections_ur = _urdu_section_flags(request.args)
+        alt_mode_ur = _urdu_alt_name_mode(request.args)
 
     # Prefer saved Urdu names; otherwise use a best-effort transliteration.
     # Shared with the scanned-bill page so both show the same Urdu names.
     prepared = urdu_bill_data(source, show_terms=show_terms_ur,
-                              terms=selected_terms_ur)
+                              terms=selected_terms_ur, alt_mode=alt_mode_ur)
     items = prepared['items']
     client_name_ur = prepared['client_name_ur']
     driver_name_ur = prepared['driver_name_ur']
