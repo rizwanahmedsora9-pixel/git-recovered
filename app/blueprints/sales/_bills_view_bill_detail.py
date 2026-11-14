@@ -1,5 +1,6 @@
 """bills — split from sales.py."""
 from ._common import *  # noqa
+from ._bills_download_invoice import _direct_sale_bill_items
 
 @bp.route('/view_bill_detail/<string:type>/<int:id>')
 @login_required
@@ -16,25 +17,7 @@ def view_bill_detail(type, id):
         if not (getattr(bill, 'note', None) or '').strip():
             if getattr(bill, 'invoice', None) and (getattr(bill.invoice, 'note', None) or '').strip():
                 bill.note = bill.invoice.note.strip()
-        sale_entries = Entry.query.filter(
-            Entry.source_module == 'sales',
-            Entry.source_table == 'direct_sale',
-            Entry.source_id == bill.id,
-            Entry.is_void == False
-        ).order_by(Entry.id.asc()).all()
-        entry_map = {}
-        for e in sale_entries:
-            key = ((e.material or '').strip(), float(e.qty or 0))
-            entry_map.setdefault(key, []).append(e)
-
-        items = []
-        for it in (bill.items or []):
-            key = ((it.product_name or '').strip(), float(it.qty or 0))
-            entry = entry_map.get(key, []).pop(0) if entry_map.get(key) else None
-            name = it.product_name
-            if entry and entry.booked_material and entry.material and entry.booked_material.strip() != entry.material.strip():
-                name = format_alt_material_label(entry.booked_material, entry.material)
-            items.append({'name': name, 'qty': it.qty, 'price_at_time': it.price_at_time})
+        items = _direct_sale_bill_items(bill)
     elif type == 'MaterialReturn':
         bill = MaterialReturn.query.get_or_404(id)
         items = bill.items

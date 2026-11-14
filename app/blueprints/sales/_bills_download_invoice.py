@@ -84,7 +84,7 @@ def _translate_material_ur(raw_name, names_map, alt_mode='both'):
     text = str(raw_name or '').strip()
     if not text:
         return ''
-    alt_match = re.match(r'^(.+?)\s*\(ALT for booked (.+?)\)$', text)
+    alt_match = re.match(r'^(.+?)\s*\(ALT for booked\s+(.+?)\)$', text, flags=re.IGNORECASE)
     if alt_match:
         deliv_raw = alt_match.group(1).strip()
         booked_raw = alt_match.group(2).strip()
@@ -94,7 +94,7 @@ def _translate_material_ur(raw_name, names_map, alt_mode='both'):
             return booked_ur
         if alt_mode == 'delivered':
             return deliv_ur
-        return deliv_ur
+        return f"{deliv_ur} (بجائے {booked_ur})"
     return urdu_name(text, names_map.get(text.casefold(), ''))
 
 
@@ -121,7 +121,7 @@ def _with_urdu_item_names(items, lang, alt_mode='both'):
     return rows
 
 
-def _with_urdu_booked_summary(summary):
+def _with_urdu_booked_summary(summary, alt_mode='both'):
     """Copy ``material_stock_summary`` rows with Urdu material names added."""
     if not summary:
         return []
@@ -130,16 +130,115 @@ def _with_urdu_booked_summary(summary):
     for row in summary:
         item = dict(row) if isinstance(row, dict) else {
             'material': getattr(row, 'material', ''),
+            'material_display': getattr(row, 'material_display', ''),
             'dispatched': getattr(row, 'dispatched', 0),
             'added': getattr(row, 'added', 0),
             'last_stock': getattr(row, 'last_stock', 0),
             'remaining': getattr(row, 'remaining', 0),
         }
-        mat = str(item.get('material') or '').strip()
+        mat = str(item.get('material') or item.get('material_display') or '').strip()
         if not (item.get('material_ur') or '').strip():
-            item['material_ur'] = _translate_material_ur(mat, names)
+            item['material_ur'] = _translate_material_ur(mat, names, alt_mode)
         rows.append(item)
     return rows
+
+
+def _direct_sale_bill_items(sale):
+    """Build bill item rows for a DirectSale, preserving alternate booked labels."""
+    if not sale:
+        return []
+    sale_entries = Entry.query.filter(
+        Entry.source_module == 'sales',
+        Entry.source_table == 'direct_sale',
+        Entry.source_id == sale.id,
+        Entry.is_void == False,
+    ).order_by(Entry.id.asc()).all()
+
+    if not sale_entries:
+        refs = _direct_sale_bill_refs(sale)
+        if refs:
+            legacy_q = Entry.query.filter(
+                Entry.bill_no.in_(refs),
+                Entry.nimbus_no == 'Direct Sale',
+                Entry.type == 'OUT',
+                Entry.is_void == False,
+            )
+            client_code = (getattr(sale, 'client_code', None) or '').strip()
+            client_name = (getattr(sale, 'client_name', None) or '').strip()
+            if client_code:
+                legacy_q = legacy_q.filter(or_(
+                    Entry.client_code == client_code,
+                    func.lower(func.trim(func.coalesce(Entry.client, ''))) == client_name.lower(),
+                ))
+            elif client_name:
+                legacy_q = legacy_q.filter(
+                    func.lower(func.trim(func.coalesce(Entry.client, ''))) == client_name.lower()
+                )
+            sale_entries = legacy_q.order_by(Entry.id.asc()).all()
+
+    typed_entry_map = {}
+    loose_entry_map = {}
+    for e in sale_entries:
+        mat = (e.material or '').strip()
+        qty_key = round(float(e.qty or 0), 6)
+        is_bk_entry = ((e.client_category or '').strip() == 'Booking Delivery')
+        typed_entry_map.setdefault((mat, qty_key, is_bk_entry), []).append(e)
+        loose_entry_map.setdefault((mat, qty_key), []).append(e)
+
+    sale_items = list(sale.items or [])
+    sale_item_ids = [it.id for it in sale_items if getattr(it, 'id', None)]
+    alloc_booked_by_item = {}
+    if sale_item_ids:
+        alloc_rows = (
+            BookingAllocation.query
+            .filter(
+                BookingAllocation.sale_item_id.in_(sale_item_ids),
+                BookingAllocation.is_void == False,
+            )
+            .order_by(BookingAllocation.id.asc())
+            .all()
+        )
+        for alloc in alloc_rows:
+            bk_item = getattr(alloc, 'booking_item', None)
+            bk_mat = (getattr(bk_item, 'material_name', None) or '').strip()
+            if bk_mat and alloc.sale_item_id not in alloc_booked_by_item:
+                alloc_booked_by_item[alloc.sale_item_id] = bk_mat
+
+    category = normalize_sale_category(getattr(sale, 'category', None))
+    used_entry_ids = set()
+
+    def _pop_unused(bucket):
+        while bucket:
+            cand = bucket.pop(0)
+            cid = getattr(cand, 'id', id(cand))
+            if cid not in used_entry_ids:
+                used_entry_ids.add(cid)
+                return cand
+        return None
+
+    items = []
+    for it in sale_items:
+        delivered = (it.product_name or '').strip()
+        qty_key = round(float(it.qty or 0), 6)
+        is_booked_line = (
+            category in ('Booking Delivery', 'Mixed Transaction')
+            and float(it.price_at_time or 0) <= 0
+        )
+        entry = _pop_unused(typed_entry_map.get((delivered, qty_key, is_booked_line)))
+        if entry is None and (is_booked_line or category not in ('Booking Delivery', 'Mixed Transaction')):
+            entry = _pop_unused(loose_entry_map.get((delivered, qty_key)))
+
+        booked_name = ''
+        if entry and (entry.booked_material or '').strip():
+            booked_name = entry.booked_material.strip()
+        elif is_booked_line and getattr(it, 'id', None) in alloc_booked_by_item:
+            booked_name = alloc_booked_by_item[it.id]
+
+        name = it.product_name
+        if booked_name and delivered and booked_name.casefold() != delivered.casefold():
+            name = format_alt_material_label(booked_name, delivered)
+        items.append({'name': name, 'qty': it.qty, 'price_at_time': (it.price_at_time or 0)})
+    return items
 
 
 def _find_receipt_account_tx(source_type, source_id):
@@ -340,25 +439,7 @@ def bill_document_source(bill_no, *, hint_type=None, hint_id=None,
         if not (getattr(sale, 'note', None) or '').strip():
             if getattr(sale, 'invoice', None) and (getattr(sale.invoice, 'note', None) or '').strip():
                 sale.note = sale.invoice.note.strip()
-        sale_entries = Entry.query.filter(
-            Entry.source_module == 'sales',
-            Entry.source_table == 'direct_sale',
-            Entry.source_id == sale.id,
-            Entry.is_void == False
-        ).order_by(Entry.id.asc()).all()
-        entry_map = {}
-        for e in sale_entries:
-            key = ((e.material or '').strip(), float(e.qty or 0))
-            entry_map.setdefault(key, []).append(e)
-
-        items = []
-        for it in (sale.items or []):
-            key = ((it.product_name or '').strip(), float(it.qty or 0))
-            entry = entry_map.get(key, []).pop(0) if entry_map.get(key) else None
-            name = it.product_name
-            if entry and entry.booked_material and entry.material and entry.booked_material.strip() != entry.material.strip():
-                name = format_alt_material_label(entry.booked_material, entry.material)
-            items.append({'name': name, 'qty': it.qty, 'price_at_time': it.price_at_time})
+        items = _direct_sale_bill_items(sale)
 
         if not (sale.driver_name or '').strip():
             inferred_driver = _infer_driver_name_from_refs(_direct_sale_bill_refs(sale))
@@ -496,16 +577,10 @@ def bill_document_source(bill_no, *, hint_type=None, hint_id=None,
                     'price_at_time': inferred_rate
                 })
         elif getattr(invoice, 'direct_sales', None) and invoice.direct_sales:
-            ds = invoice.direct_sales[0]
-            # Preserve item rates so line amount matches invoice totals on first-open.
-            items = [
-                {
-                    'name': it.product_name,
-                    'qty': it.qty,
-                    'price_at_time': (it.price_at_time or 0)
-                }
-                for it in ds.items
-            ]
+            active_sales = [d for d in invoice.direct_sales if not getattr(d, 'is_void', False)]
+            ds = active_sales[0] if active_sales else invoice.direct_sales[0]
+            # Preserve item rates and alternate booked labels so line items match DirectSale receipts.
+            items = _direct_sale_bill_items(ds)
     elif grn:
         bill_obj = grn
         bill_type = 'GRN'
@@ -617,7 +692,9 @@ def urdu_bill_data(source, *, show_terms=False, terms=None, alt_mode='both'):
         'client_name_ur': client_name_ur,
         'driver_name_ur': driver_name_ur,
         'delivery_people': delivery_people,
-        'booked_summary': _with_urdu_booked_summary(source.get('material_stock_summary')),
+        'booked_summary': _with_urdu_booked_summary(
+            source.get('material_stock_summary'), alt_mode
+        ),
         'terms': get_selected_terms(terms) if show_terms else [],
     }
 

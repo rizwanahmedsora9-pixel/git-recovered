@@ -1323,10 +1323,35 @@ def _active_direct_sale_items_generate_entries(sale, refs=None, client_code=None
             if row['material'] == delivered and abs(float(row['qty'] or 0) - q) <= 0.0001:
                 row['used'] = True
                 return row['booked_material']
+        for row in old_alt_candidates:
+            if row['used']:
+                continue
+            if row['material'] == delivered:
+                row['used'] = True
+                return row['booked_material']
         return None
 
+    sale_items = list(sale.items or [])
+    sale_item_ids = [it.id for it in sale_items if getattr(it, 'id', None)]
+    alloc_booked_by_item = {}
+    if sale_item_ids:
+        alloc_rows = (
+            BookingAllocation.query
+            .filter(
+                BookingAllocation.sale_item_id.in_(sale_item_ids),
+                BookingAllocation.is_void == False,
+            )
+            .order_by(BookingAllocation.id.asc())
+            .all()
+        )
+        for alloc in alloc_rows:
+            bk_item = getattr(alloc, 'booking_item', None)
+            bk_mat = (getattr(bk_item, 'material_name', None) or '').strip()
+            if bk_mat and alloc.sale_item_id not in alloc_booked_by_item:
+                alloc_booked_by_item[alloc.sale_item_id] = bk_mat
+
     created = 0
-    for item in sale.items or []:
+    for item in sale_items:
         qty = float(item.qty or 0)
         if qty <= 0:
             continue
@@ -1336,8 +1361,15 @@ def _active_direct_sale_items_generate_entries(sale, refs=None, client_code=None
             continue
         inferred_booked_material = None
         if item_category == 'Booking Delivery':
-            inferred_booked_material = _take_old_booked_material(item.product_name, qty)
-        is_alt = bool(inferred_booked_material and inferred_booked_material != item.product_name)
+            inferred_booked_material = (
+                (alloc_booked_by_item.get(getattr(item, 'id', None)) or '').strip()
+                or _take_old_booked_material(item.product_name, qty)
+            )
+        is_alt = bool(
+            inferred_booked_material
+            and (item.product_name or '').strip()
+            and inferred_booked_material.strip().casefold() != (item.product_name or '').strip().casefold()
+        )
         row = Entry(
             date=now.strftime('%Y-%m-%d'),
             time=now.strftime('%H:%M:%S'),

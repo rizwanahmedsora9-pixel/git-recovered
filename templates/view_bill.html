@@ -7,12 +7,22 @@
 {% macro fmt_num(v) -%}
 {{ "{:,.2f}".format((v|default(0, true)|float)).rstrip('0').rstrip('.') }}
 {%- endmacro %}
-{% set pdf_bill_no = (bill.manual_bill_no or bill.auto_bill_no or bill.invoice_no or '') %}
+{% set fallback_src_map = {
+    'DirectSale': 'direct_sale',
+    'Booking': 'booking',
+    'Payment': 'payment',
+    'Invoice': 'invoice',
+    'GRN': 'grn'
+} %}
+{% set resolved_src = request.args.get('src') or fallback_src_map.get(type) %}
+{% set resolved_src_id = request.args.get('src_id') or (bill.id if (bill.id is defined and bill.id and resolved_src) else None) %}
+{% set fallback_prefix_map = {'DirectSale': 'DS-', 'Booking': 'BK-', 'Payment': 'PAY-'} %}
+{% set pdf_bill_no = (bill.manual_bill_no or bill.auto_bill_no or bill.invoice_no or (bill.invoice.invoice_no if (bill.invoice is defined and bill.invoice and bill.invoice.invoice_no) else '') or ((fallback_prefix_map.get(type) ~ bill.id) if (type in fallback_prefix_map and bill.id is defined and bill.id) else '') or '') %}
 {% set bill_lang = bill_lang|default('en') %}
 {% set pdf_args = {
     'bill_no': pdf_bill_no,
-    'src': request.args.get('src'),
-    'src_id': request.args.get('src_id'),
+    'src': resolved_src,
+    'src_id': resolved_src_id,
     'client_code': request.args.get('client_code'),
     'client_name': request.args.get('client_name'),
     'entry_id': request.args.get('entry_id')
