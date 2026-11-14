@@ -377,6 +377,13 @@
                 {% for sale in sales %}
                 <tr {% if sale.is_void %}class="ds-row-void"{% endif %}>
                     <td class="text-center" data-label="Bill No.">
+                        {#
+                          The Bill No column must name the bill that was actually
+                          saved.  A manual number wins; otherwise the auto/system
+                          number (``SB-SL-####``) is the bill number and belongs
+                          here, not only under System Ref.  ``CASH-SALE`` is a
+                          placeholder for the rare row that really has neither.
+                        #}
                         {% set shown_refs = [] %}
                         {% if sale.manual_bill_no and sale.manual_bill_no not in shown_refs %}
                         <a href="{{ url_for('view_bill', bill_no=sale.manual_bill_no|replace('#', '%23'), src='direct_sale', src_id=sale.id, client_name=sale.client_name) }}" class="badge bg-dark border border-secondary text-warning text-decoration-none me-1">{{ sale.manual_bill_no }}</a>
@@ -385,6 +392,10 @@
                         {% if sale.invoice and sale.invoice.invoice_no and sale.invoice.invoice_no not in shown_refs %}
                         <a href="{{ url_for('view_bill', bill_no=sale.invoice.invoice_no|replace('#', '%23'), src='direct_sale', src_id=sale.id, client_name=sale.client_name) }}" class="badge bg-dark border border-secondary text-info text-decoration-none me-1">{{ sale.invoice.invoice_no }}</a>
                         {% set _ = shown_refs.append(sale.invoice.invoice_no) %}
+                        {% endif %}
+                        {% if not shown_refs and sale.auto_bill_no %}
+                        <a href="{{ url_for('view_bill', bill_no=sale.auto_bill_no|replace('#', '%23'), src='direct_sale', src_id=sale.id, client_name=sale.client_name) }}" class="badge bg-dark border border-secondary text-info text-decoration-none me-1">{{ sale.auto_bill_no }}</a>
+                        {% set _ = shown_refs.append(sale.auto_bill_no) %}
                         {% endif %}
                         {% if not shown_refs %}
                         <span class="badge bg-secondary text-white border border-secondary border-opacity-25">CASH-SALE</span>
