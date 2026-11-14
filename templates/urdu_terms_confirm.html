@@ -10,9 +10,14 @@
                 </div>
                 <div class="card-body p-4">
                     <form method="GET"
-                          action="{{ url_for('download_invoice', bill_no=bill_no, lang='ur', action=action,
-                                              src=src, src_id=src_id, client_code=client_code,
-                                              client_name=client_name, entry_id=entry_id) }}">
+                          action="{{ url_for('download_invoice', bill_no=bill_no) }}">
+                        <input type="hidden" name="lang" value="ur">
+                        {% if action %}<input type="hidden" name="action" value="{{ action }}">{% endif %}
+                        {% if src %}<input type="hidden" name="src" value="{{ src }}">{% endif %}
+                        {% if src_id %}<input type="hidden" name="src_id" value="{{ src_id }}">{% endif %}
+                        {% if client_code %}<input type="hidden" name="client_code" value="{{ client_code }}">{% endif %}
+                        {% if client_name %}<input type="hidden" name="client_name" value="{{ client_name }}">{% endif %}
+                        {% if entry_id %}<input type="hidden" name="entry_id" value="{{ entry_id }}">{% endif %}
                         <p class="text-white small mb-3">
                             <bdi dir="rtl" class="fw-bold">شرائط و ضوابط:</bdi> Display Terms &amp; Conditions on this Urdu receipt?
                         </p>

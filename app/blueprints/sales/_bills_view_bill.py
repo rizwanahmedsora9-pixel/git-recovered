@@ -1,5 +1,6 @@
 """bills — split from sales.py."""
 from ._common import *  # noqa
+from ._bills_download_invoice import _direct_sale_bill_items
 
 @bp.route('/view_bill/<path:bill_no>')
 @login_required
@@ -203,29 +204,7 @@ def view_bill(bill_no):
             'rent_variance_loss': float(getattr(sale, 'rent_variance_loss', 0) or calc_rec['rent_variance_loss'])
         }
         # Preserve alternate booked material display on the bill by using ledger entry mapping
-        sale_entries = Entry.query.filter(
-            Entry.source_module == 'sales',
-            Entry.source_table == 'direct_sale',
-            Entry.source_id == sale.id,
-            Entry.is_void == False
-        ).order_by(Entry.id.asc()).all()
-        sale_entry_map = {}
-        for e in sale_entries:
-            key = ((e.material or '').strip(), float(e.qty or 0))
-            sale_entry_map.setdefault(key, []).append(e)
-
-        bill_items = []
-        for it in (sale.items or []):
-            key = ((it.product_name or '').strip(), float(it.qty or 0))
-            entry = sale_entry_map.get(key, []).pop(0) if sale_entry_map.get(key) else None
-            name = it.product_name
-            if entry and entry.booked_material and entry.material and entry.booked_material.strip() != entry.material.strip():
-                name = format_alt_material_label(entry.booked_material, entry.material)
-            bill_items.append({
-                'name': name,
-                'qty': it.qty,
-                'price_at_time': it.price_at_time
-            })
+        bill_items = _direct_sale_bill_items(sale)
 
         tx_code, tx_label, tx_note = _resolve_transaction_type('DirectSale', sale, entry_hint_id=entry_hint_id)
         return render_template('view_bill.html', bill=sale, type='DirectSale', items=bill_items, client=client, client_balance=client_balance, previous_balance=previous_balance, recent_deliveries=recent_deliveries, material_ledger_recent=material_ledger_recent, material_stock_summary=material_stock_summary, clients=all_clients, materials=all_materials, transaction_type_code=tx_code, transaction_type_label=tx_label, transaction_type_note=tx_note, direct_sale_rent_reconciliation=direct_sale_rent_reconciliation, delivery_people=delivery_people, pk_now=pk_now)
@@ -287,16 +266,10 @@ def view_bill(bill_no):
                     'price_at_time': inferred_rate
                 })
         elif getattr(invoice, 'direct_sales', None) and invoice.direct_sales:
-            ds = invoice.direct_sales[0]
-            # Preserve item rates so line amount matches invoice totals on first-open.
-            items = [
-                {
-                    'name': it.product_name,
-                    'qty': it.qty,
-                    'price_at_time': (it.price_at_time or 0)
-                }
-                for it in ds.items
-            ]
+            active_sales = [d for d in invoice.direct_sales if not getattr(d, 'is_void', False)]
+            ds = active_sales[0] if active_sales else invoice.direct_sales[0]
+            # Preserve item rates and alternate booked labels so line items match DirectSale receipts.
+            items = _direct_sale_bill_items(ds)
         tx_code, tx_label, tx_note = _resolve_transaction_type('Invoice', invoice, entry_hint_id=entry_hint_id)
         return render_template('view_bill.html', bill=invoice, type='Invoice', items=items, client=client, client_balance=client_balance, previous_balance=previous_balance, recent_deliveries=recent_deliveries, material_ledger_recent=material_ledger_recent, material_stock_summary=material_stock_summary, clients=all_clients, materials=all_materials, transaction_type_code=tx_code, transaction_type_label=tx_label, transaction_type_note=tx_note, delivery_people=delivery_people, pk_now=pk_now)
     if grn:

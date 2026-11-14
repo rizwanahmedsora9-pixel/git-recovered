@@ -1551,7 +1551,8 @@ def test_urdu_alt_material_name_modes():
     """The print dialog picks how an alternate-material line is named."""
     from werkzeug.datastructures import MultiDict
     from app.blueprints.sales._bills_download_invoice import (
-        _translate_material_ur, _urdu_alt_name_mode, _with_urdu_item_names)
+        _translate_material_ur, _urdu_alt_name_mode,
+        _with_urdu_booked_summary, _with_urdu_item_names)
 
     names = {'steel 20mm': 'بیس ملی میٹر', 'steel 12mm': 'بارہ ملی میٹر'}
     label = 'Steel 20mm (ALT for booked Steel 12mm)'
@@ -1572,3 +1573,189 @@ def test_urdu_alt_material_name_modes():
     assert _urdu_alt_name_mode(MultiDict([('alt_name', 'Booked')])) == 'booked'
     assert _urdu_alt_name_mode(MultiDict([('alt_name', 'delivered')])) == 'delivered'
     assert _with_urdu_item_names([], 'ur', 'booked') == []
+
+    summary_in = [{'material': label, 'last_stock': 100, 'dispatched': 40, 'added': 0, 'remaining': 60}]
+    # _with_urdu_booked_summary honours alt_mode using Material.name_ur or fallback urdu_name()
+    sum_both = _with_urdu_booked_summary(summary_in, 'both')[0]['material_ur']
+    sum_booked = _with_urdu_booked_summary(summary_in, 'booked')[0]['material_ur']
+    sum_deliv = _with_urdu_booked_summary(summary_in, 'delivered')[0]['material_ur']
+    assert 'بجائے' in sum_both
+    assert 'بجائے' not in sum_booked and 'بجائے' not in sum_deliv
+    assert sum_booked == _translate_material_ur('Steel 12mm', {})
+    assert sum_deliv == _translate_material_ur('Steel 20mm', {})
+    assert sum_booked != sum_deliv
+
+
+def test_urdu_alt_material_booked_delivered_both_e2e(client, app):
+    """Selecting Booked / Delivered / Both applies across Items, Booked Summary,
+    linked Invoices, fallback confirm form, view_bill_detail, and rebuilds."""
+    from app import db
+    from app.services.void_rebuild import rebuild_direct_sale_effects
+    from models import (
+        BookingAllocation, DirectSale, DirectSaleItem, Entry, Invoice,
+        Material, Settings,
+    )
+
+    _login(client)
+    with app.app_context():
+        settings = Settings.query.first() or Settings()
+        settings.allow_global_negative_stock = True
+        db.session.add(settings)
+        db.session.commit()
+
+    for m_name in ('Steel 12mm', 'Steel 20mm'):
+        client.post('/add_material',
+                    data={'material_name': m_name, 'material_unit': 'Kg'},
+                    follow_redirects=True)
+
+    with app.app_context():
+        m12 = Material.query.filter_by(name='Steel 12mm').first()
+        m20 = Material.query.filter_by(name='Steel 20mm').first()
+        assert m12 is not None and m20 is not None
+        m12.name_ur = 'بارہ ملی میٹر'
+        m20.name_ur = 'بیس ملی میٹر'
+        db.session.commit()
+        m12_id = m12.id
+
+    client.post('/add_client', data={
+        'name': 'Alt Client', 'code': 'FBMCL-00099',
+        'category': 'General', 'opening_balance': '0',
+    }, follow_redirects=True)
+    client.post('/delivery_persons/add', data={
+        'name': 'Akram Driver', 'phone': '03009998877',
+    }, follow_redirects=True)
+
+    # Booking for 100 Kg of Steel 12mm
+    resp_bk = client.post('/add_booking', data={
+        'client_code': 'FBMCL-00099',
+        'client_name': 'Alt Client',
+        'manual_bill_no': 'BK-ALT-99',
+        'amount': '20000',
+        'paid_amount': '0',
+        'material_name[]': ['Steel 12mm'],
+        'material_id[]': [str(m12_id)],
+        'qty[]': ['100'],
+        'unit_rate[]': ['200'],
+        'date': '2026-06-10',
+    }, follow_redirects=True)
+    assert resp_bk.status_code == 200
+
+    # 1. Pure alternate Booking Delivery: booked Steel 12mm -> delivered Steel 20mm
+    resp_ds = client.post('/add_direct_sale', data={
+        'client_code': 'FBMCL-00099',
+        'client_name': 'Alt Client',
+        'category': 'Booking Delivery',
+        'manual_bill_no': 'DS-ALT-99',
+        'driver_name': 'Akram Driver',
+        'product_name[]': ['Steel 12mm'],
+        'alternate_material[]': ['Steel 20mm'],
+        'qty[]': ['40'],
+        'unit_rate[]': ['0'],
+        'date': '2026-06-11',
+    }, follow_redirects=True)
+    assert resp_ds.status_code == 200
+
+    # 2. Mixed Transaction with Create Invoice: remaining 60 Kg booked (alternate) + 20 Kg due
+    resp_mix = client.post('/add_direct_sale', data={
+        'client_code': 'FBMCL-00099',
+        'client_name': 'Alt Client',
+        'category': 'Mixed Transaction',
+        'create_invoice': '1',
+        'manual_bill_no': 'MIX-ALT-99',
+        'driver_name': 'Akram Driver',
+        'product_name[]': ['Steel 12mm'],
+        'alternate_material[]': ['Steel 20mm'],
+        'qty[]': ['80'],
+        'unit_rate[]': ['250'],
+        'date': '2026-06-12',
+    }, follow_redirects=True)
+    assert resp_mix.status_code == 200
+
+    with app.app_context():
+        ds = DirectSale.query.filter(DirectSale.manual_bill_no.like('%DS-ALT-99%')).first()
+        mix = DirectSale.query.filter(DirectSale.manual_bill_no.like('%MIX-ALT-99%')).first()
+        assert ds is not None and mix is not None
+        assert mix.invoice_id is not None
+        inv = db.session.get(Invoice, mix.invoice_id)
+        assert inv is not None
+        ds_id, ds_no = ds.id, (ds.manual_bill_no or ds.auto_bill_no)
+        mix_id, inv_id, inv_no = mix.id, inv.id, inv.invoice_no
+
+    # Confirm page preserves query params as hidden inputs for GET submission
+    confirm_html = client.get(
+        f'/download_invoice/{ds_no}?src=direct_sale&src_id={ds_id}&lang=ur&action=print'
+    ).get_data(as_text=True)
+    assert '<input type="hidden" name="lang" value="ur">' in confirm_html
+    assert '<input type="hidden" name="action" value="print">' in confirm_html
+    assert '<input type="hidden" name="src" value="direct_sale">' in confirm_html
+    assert f'<input type="hidden" name="src_id" value="{ds_id}">' in confirm_html
+
+    # Pure alternate Booking Delivery checks across Booked / Delivered / Both
+    booked_html = client.get(
+        f'/download_invoice/{ds_no}?src=direct_sale&src_id={ds_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=booked'
+    ).get_data(as_text=True)
+    assert 'بارہ ملی میٹر' in booked_html
+    assert 'بیس ملی میٹر' not in booked_html
+    assert 'بجائے' not in booked_html
+
+    deliv_html = client.get(
+        f'/download_invoice/{ds_no}?src=direct_sale&src_id={ds_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=delivered'
+    ).get_data(as_text=True)
+    assert 'بیس ملی میٹر' in deliv_html
+    assert 'بارہ ملی میٹر' not in deliv_html
+    assert 'بجائے' not in deliv_html
+
+    both_html = client.get(
+        f'/download_invoice/{ds_no}?src=direct_sale&src_id={ds_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=both'
+    ).get_data(as_text=True)
+    assert 'بیس ملی میٹر' in both_html
+    assert 'بارہ ملی میٹر' in both_html
+    assert 'بجائے' in both_html
+
+    # Linked Invoice for Mixed Transaction preserves alternate label (Items + Booked Summary)
+    inv_booked_html = client.get(
+        f'/download_invoice/{inv_no}?src=invoice&src_id={inv_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=booked'
+    ).get_data(as_text=True)
+    assert 'بارہ ملی میٹر' in inv_booked_html
+    assert 'بجائے' not in inv_booked_html
+
+    inv_deliv_html = client.get(
+        f'/download_invoice/{inv_no}?src=invoice&src_id={inv_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=delivered'
+    ).get_data(as_text=True)
+    assert 'بیس ملی میٹر' in inv_deliv_html
+    assert 'بارہ ملی میٹر' not in inv_deliv_html
+    assert 'بجائے' not in inv_deliv_html
+
+    inv_both_html = client.get(
+        f'/download_invoice/{inv_no}?src=invoice&src_id={inv_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=both'
+    ).get_data(as_text=True)
+    assert 'بیس ملی میٹر' in inv_both_html
+    assert 'بارہ ملی میٹر' in inv_both_html
+    assert 'بجائے' in inv_both_html
+
+    # view_bill_detail embeds src & src_id on Urdu print/PDF links
+    detail_html = client.get(f'/view_bill_detail/DirectSale/{mix_id}').get_data(as_text=True)
+    assert 'src=direct_sale' in detail_html
+    assert f'src_id={mix_id}' in detail_html
+
+    # Rebuilding a DirectSale after qty edit preserves Entry.booked_material via BookingAllocation
+    with app.app_context():
+        ds = db.session.get(DirectSale, ds_id)
+        dsi = DirectSaleItem.query.filter_by(sale_id=ds_id).first()
+        assert BookingAllocation.query.filter_by(sale_item_id=dsi.id, is_void=False).first() is not None
+        dsi.qty = 35
+        db.session.flush()
+        rebuild_direct_sale_effects(ds, rebuild_stock=False)
+        db.session.commit()
+        rebuilt_entry = Entry.query.filter_by(
+            source_module='sales', source_table='direct_sale', source_id=ds_id, is_void=False
+        ).first()
+        assert rebuilt_entry is not None
+        assert rebuilt_entry.booked_material == 'Steel 12mm'
+
+    rebuilt_booked_html = client.get(
+        f'/download_invoice/{ds_no}?src=direct_sale&src_id={ds_id}&lang=ur&action=print&tc=0&booked_summary=1&alt_name=booked'
+    ).get_data(as_text=True)
+    assert 'بارہ ملی میٹر' in rebuilt_booked_html
+    assert 'بیس ملی میٹر' not in rebuilt_booked_html
+
