@@ -869,7 +869,7 @@ def _label_value(sheet, right_x, baseline, label, value, value_size=8.0,
 
 def _panel_field(sheet, right_x, baseline, label, value, value_size,
                  label_color=MUTED, gap=1.0, max_width=None, urdu=None,
-                 left_limit=None):
+                 left_limit=None, shrink_to_fit=False):
     """Draw ``label: value`` right-to-left; return the cursor after the value."""
     label_text = label if label.endswith(':') else label + ':'
     sheet.text(right_x, baseline, label_text, PANEL_LABEL_SIZE,
@@ -881,7 +881,24 @@ def _panel_field(sheet, right_x, baseline, label, value, value_size,
         available = max_width if max_width is not None else cursor - floor
         if left_limit is not None:
             available = min(available, max(20.0, cursor - left_limit))
-        value = _fit(value, value_size, available, urdu=urdu)
+        if shrink_to_fit:
+            # Keep the entire client name on the same line, using the largest
+            # size that fits its reserved space. Measure with the actual face
+            # used by both PDF and print, including Nastaleeq word gaps.
+            if not urdu:
+                register_latin_fonts()
+            measure = _urdu_width if urdu else (lambda t, s: _latin_width(t, SANS, s))
+            if measure(value, value_size) > available:
+                low, high = 0.0, value_size
+                for _ in range(32):
+                    mid = (low + high) / 2
+                    if measure(value, mid) <= available:
+                        low = mid
+                    else:
+                        high = mid
+                value_size = low
+        else:
+            value = _fit(value, value_size, available, urdu=urdu)
         sheet.text(cursor, baseline, value, value_size, color=INK,
                    font=SANS, align='right', urdu=urdu)
         cursor -= (_urdu_width(value, value_size) if urdu
@@ -904,11 +921,30 @@ def _draw_panel(state, doc):
     # Right panel: bill-to + contact on the first row, code on the second.
     cursor = right_inner
     if sheet_option(doc, 'party'):
-        cursor = _panel_field(sheet, right_inner, PANEL_RIGHT_TOP,
-                              doc.get('party_label') or 'بل برائے',
-                              doc.get('party_name'), PANEL_PARTY_SIZE,
-                              max_width=PANEL_BOX_W - 2 * PANEL_INNER_PAD - 60,
-                              left_limit=right_floor)
+        party_label = doc.get('party_label') or 'بل برائے'
+        if doc.get('type_label') == 'GRN':
+            # Supplier panels keep their existing layout.
+            cursor = _panel_field(sheet, right_inner, PANEL_RIGHT_TOP,
+                                  party_label, doc.get('party_name'), PANEL_PARTY_SIZE,
+                                  max_width=PANEL_BOX_W - 2 * PANEL_INNER_PAD - 60,
+                                  left_limit=right_floor)
+        else:
+            label_text = party_label if party_label.endswith(':') else party_label + ':'
+            name_space = (right_inner - _urdu_width(label_text, PANEL_LABEL_SIZE)
+                          - 1.0 - right_floor)
+            if sheet_option(doc, 'ref'):
+                contact = doc.get('party_phone') or '____'
+                contact_urdu = has_arabic(contact) or contact == '____'
+                if contact_urdu:
+                    contact_width = _urdu_width(contact, PANEL_LABEL_SIZE)
+                else:
+                    register_latin_fonts()
+                    contact_width = _latin_width(contact, SANS, PANEL_LATIN_SIZE)
+                name_space -= _urdu_width('حوالہ:', PANEL_LABEL_SIZE) + contact_width + 2.0
+            cursor = _panel_field(sheet, right_inner, PANEL_RIGHT_TOP,
+                                  party_label, doc.get('party_name'), PANEL_PARTY_SIZE,
+                                  max_width=max(1.0, name_space),
+                                  left_limit=right_floor, shrink_to_fit=True)
     if sheet_option(doc, 'ref'):
         contact = doc.get('party_phone') or '____'
         contact_urdu = has_arabic(contact) or contact == '____'

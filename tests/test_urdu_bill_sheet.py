@@ -705,6 +705,74 @@ def test_party_panel_carries_the_contact_placeholder_and_code():
     assert 'اکاؤنٹ:' in text
 
 
+@pytest.mark.parametrize('name', [
+    'اشرف اجنالہ (سلیم احمد)',
+    'محمد اشرف اجنالہ سلیم احمد گجر',
+    'اشرف اجنالہ (Saleem 123)',
+    'A very long client name with several words',
+])
+def test_long_party_name_fits_without_truncation(name):
+    client = SimpleNamespace(code='FBMCL-00002', phone='0300-1234567')
+    doc = _document(client=client, client_name_ur=name)
+    sheet = R.layout_document(doc)[0]
+    name_op = next(op for op in _ops(sheet, 'text') if op['text'] == name)
+    label = next(op for op in _ops(sheet, 'text') if op['text'] == 'حوالہ:')
+    width = (R._urdu_width(name, name_op['size']) if name_op['urdu']
+             else R._latin_width(name, R.SANS, name_op['size']))
+    left_edge = name_op['x'] - width
+    assert 0 < name_op['size'] < R.PANEL_PARTY_SIZE
+    assert left_edge >= R.PANEL_RIGHT_X + R.PANEL_INNER_PAD
+    assert label['x'] <= left_edge
+    assert any(op['text'] == '0300 1234567' for op in _ops(sheet, 'text'))
+    assert not any('…' in op['text'] for op in _ops(sheet, 'text')
+                   if abs(op['y'] - R.PANEL_RIGHT_TOP) < 0.01)
+    # Both outputs use the same sheet, including the optional carbon copy.
+    for copies in (1, 2):
+        pages = R.compose_document(doc, copies=copies)
+        assert sum(op['text'] == name for page in pages
+                   for op in _ops(page, 'text')) == copies
+        assert len(PdfReader(io.BytesIO(R.render_pdf(doc, copies=copies))).pages) == 1
+        assert R._fmt(name_op['size']) + 'pt' in R.render_html(doc, copies=copies)
+
+
+def test_short_party_name_keeps_its_original_size():
+    doc = _document(client_name_ur='علی')
+    op = next(op for op in _ops(R.layout_document(doc)[0], 'text')
+              if op['text'] == 'علی')
+    assert op['size'] == R.PANEL_PARTY_SIZE
+
+
+def test_hiding_reference_gives_long_name_more_room():
+    name = 'اشرف اجنالہ (سلیم احمد خان گجر)'
+    visible = _document(client_name_ur=name)
+    hidden = _document(client_name_ur=name, sections={'ref': False})
+    def name_op(doc):
+        return next(op for op in _ops(R.layout_document(doc)[0], 'text')
+                    if op['text'] == name)
+    assert name_op(hidden)['size'] >= name_op(visible)['size']
+    assert 'حوالہ:' not in _texts(hidden)
+
+
+def test_supplier_panel_keeps_existing_truncation():
+    doc = _document(bill_type='GRN',
+                    bill=_bill(supplier_name='A very long supplier name with several words'))
+    texts = [op['text'] for op in _ops(R.layout_document(doc)[0], 'text')]
+    assert doc['party_name'] not in texts
+    assert any('…' in text for text in texts)
+
+
+def test_rent_dictionary_translation_on_receipt():
+    from app.services.urdu_names import urdu_name
+
+    assert urdu_name('rent') == 'کرایہ'
+    assert urdu_name('RENT Cement') == 'کرایہ سیمنٹ'
+    assert urdu_name('rent', preferred='محفوظ نام') == 'محفوظ نام'
+    doc = _document(client_name_ur='', bill=_bill(client_name='Rent Cement'))
+    assert doc['party_name'] == 'کرایہ سیمنٹ'
+    assert any(op['text'] == 'کرایہ سیمنٹ'
+               for op in _ops(R.layout_document(doc)[0], 'text'))
+
+
 def test_party_phone_comes_from_the_client_when_present():
     client = SimpleNamespace(code='FBMCL-00002', phone='0300-1234567')
     doc = _document(client=client)
