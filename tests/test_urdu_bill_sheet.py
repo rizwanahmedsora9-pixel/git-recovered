@@ -913,6 +913,24 @@ def test_standalone_m_is_muhammad_and_ahmed_uses_proper_urdu_spelling():
         assert urdu_name(frame) == 'چو گھاٹ', frame
     for b in ('brick', 'Brick', 'BRICK'):
         assert urdu_name(b) == 'اینٹ', b
+    for s in ('steel', 'Steel', 'STEEL'):
+        assert urdu_name(s) == 'سٹیل', s
+    assert urdu_name('Steel 12mm') == 'سٹیل 12 ملی میٹر'
+    assert urdu_name('12mm Steel') == '12 ملی میٹر سٹیل'
+    assert urdu_name('Ahmed Steel') == 'احمد سٹیل'
+    assert urdu_name('Steel', preferred='لوہا') == 'لوہا'
+
+    steel_doc = _document(
+        bill=_bill(client_name='Ahmed Steel'),
+        client_name_ur='',
+        items=[{'name': 'Steel 12mm', 'qty': 10, 'price_at_time': 220}],
+    )
+    assert steel_doc['party_name'] == 'احمد سٹیل'
+    assert steel_doc['items'][0]['name'] == 'سٹیل 12 ملی میٹر'
+    steel_html = bill_urdu.render_html(steel_doc)
+    assert 'احمد سٹیل' in steel_html
+    assert 'سٹیل' in steel_html
+    assert 'ستیل' not in steel_html
 
 
 def test_real_bill_renders_m_ahmed_as_muhammad_ahmed_on_sheet_and_verify(client, app):
