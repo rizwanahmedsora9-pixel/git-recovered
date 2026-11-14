@@ -91,7 +91,7 @@ _WORDS = {
     'kohat': 'کوہاٹ', 'pakistan': 'پاکستان',
     # ---- Walk-in / ledger vocabulary seen in client and driver names ----
     'open': 'اوپن', 'khata': 'کھاتہ', 'cash': 'کیش', 'paid': 'پیڈ',
-    'sale': 'سیل', 'credit': 'کریڈٹ', 'advance': 'ایڈوانس', 'rent': 'رینٹ',
+    'sale': 'سیل', 'credit': 'کریڈٹ', 'advance': 'ایڈوانس', 'rent': 'کرایہ',
     'return': 'ریٹرن', 'due': 'ڈیو', 'general': 'جنرل', 'customer': 'کسٹمر',
     'walking': 'واکنگ', 'site': 'سائٹ', 'shop': 'شاپ', 'store': 'اسٹور',
     'market': 'مارکیٹ', 'trader': 'ٹریڈر', 'traders': 'ٹریڈرز',
