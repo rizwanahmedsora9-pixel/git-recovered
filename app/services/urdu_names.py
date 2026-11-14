@@ -97,7 +97,7 @@ _WORDS = {
     'market': 'مارکیٹ', 'trader': 'ٹریڈر', 'traders': 'ٹریڈرز',
     'company': 'کمپنی', 'bank': 'بینک', 'account': 'اکاؤنٹ',
     'booking': 'بکنگ', 'delivery': 'ڈیلیوری', 'payment': 'پیمنٹ',
-    'cement': 'سیمنٹ', 'brick': 'اینٹ', 'bricks': 'اینٹ',
+    'cement': 'سیمنٹ', 'brick': 'اینٹ', 'bricks': 'اینٹ', 'steel': 'سٹیل',
     'chaugath': 'چو گھاٹ', 'chaughat': 'چو گھاٹ', 'chaugat': 'چو گھاٹ',
     'choghat': 'چو گھاٹ', 'choughat': 'چو گھاٹ',
     'mm': 'ملی میٹر', 'kg': 'کلو گرام', 'kgs': 'کلو گرام',
